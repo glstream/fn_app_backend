@@ -458,32 +458,102 @@ async def insert_managers(db, managers: list):
 
 async def insert_league_rosters(db, session_id: str, user_id: str, league_id: str) -> None:
     entry_time = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f%z")
-    rosters = await get_league_rosters(league_id)  # Ensure this is an async call
+    rosters = await get_league_rosters(league_id)
 
     league_players = []
+     
+
+    # --- *** IMPORTANT: Define a valid placeholder *** ---
+    # Choose a value that is:
+    # 1. Compatible with your `league_players.user_id` column data type (e.g., string, integer, UUID).
+    # 2. Not NULL.
+    # 3. Preferably distinct from any real owner IDs.
+    # Examples:
+    # PLACEHOLDER_OWNER_ID = "UNKNOWN_OWNER"  # If user_id is VARCHAR/TEXT
+    # PLACEHOLDER_OWNER_ID = "0"               # If user_id is VARCHAR/TEXT or potentially INT/BIGINT (if 0 is never a real ID)
+    # PLACEHOLDER_OWNER_ID = 0                 # If user_id is INT/BIGINT (if 0 is never a real ID)
+    # PLACEHOLDER_OWNER_ID = -1                # If user_id is INT/BIGINT (if -1 is never a real ID)
+    # PLACEHOLDER_OWNER_ID = "00000000-0000-0000-0000-000000000000" # If user_id is UUID
+    # --- CHOOSE THE CORRECT ONE FOR YOUR SCHEMA ---
+    PLACEHOLDER_OWNER_ID = "UNKNOWN_OWNER" 
+    unknown_owner_counter = 1
+
     for roster in rosters:
-        league_roster = roster["players"]
+        # Explicitly get owner_id, which might be None
+        raw_owner_id = roster.get("owner_id")
+
+        # Substitute with placeholder if owner_id is None
+        owner_id_to_insert = raw_owner_id if raw_owner_id is not None else PLACEHOLDER_OWNER_ID
+
+        # Log if a placeholder is being used (optional, but helpful for debugging)
+        if raw_owner_id is None:
+            placeholder_id = f"UNKNOWN_OWNER_{unknown_owner_counter}"
+            owner_id_to_insert = placeholder_id # Use the constructed placeholder
+            
+            roster_id_for_log = roster.get("roster_id", "N/A")
+            print(f"Using placeholder '{PLACEHOLDER_OWNER_ID}' for missing owner_id on roster {roster_id_for_log} in league {league_id}.")
+            
+            unknown_owner_counter += 1
+
+        league_roster = roster.get("players")
+        if league_roster is None:
+            roster_id_for_log = roster.get("roster_id", "N/A")
+            print(f"Skipping roster {roster_id_for_log} in league {league_id} due to missing 'players' list.")
+            continue
+
         try:
+            current_league_id = roster.get("league_id")
+            if not current_league_id:
+                print(f"Skipping roster {roster.get('roster_id', 'N/A')} due to missing league_id in roster data.")
+                continue
+
             for player_id in league_roster:
                 league_players.append(
-                    (session_id, user_id, player_id, roster["league_id"],
-                     roster.get("owner_id", "EMPTY"), entry_time)
+                    (session_id,           # $1 -> session_id
+                    user_id,              # $2 -> owner_user_id (requesting user)
+                    player_id,            # $3 -> player_id
+                    current_league_id,    # $4 -> league_id (from roster)
+                    owner_id_to_insert,   # $5 -> user_id (ROSTER OWNER ID or Placeholder)
+                    entry_time)           # $6 -> insert_date
                 )
-        except KeyError:
-            continue  # Skip any rosters that do not have the necessary data
+        except KeyError as e:
+            roster_id_for_log = roster.get("roster_id", "N/A")
+            print(f"KeyError {e} processing player data for roster {roster_id_for_log}. Skipping player append.")
+            # Consider if you need to continue the outer loop here
 
+    if not league_players:
+        print(f"No valid player data found to insert for league {league_id} and session {session_id}.")
+        return # Avoid trying to insert an empty list
+
+    # --- Verify ON CONFLICT Target ---
+    # Make sure the columns listed in your ON CONFLICT target match a unique constraint or primary key.
+    # Based on your previous message, the PK might be (session_id, user_id, player_id, league_id).
+    # BUT: Which user_id? The requesting user ($2 'owner_user_id') or the roster owner ($5 'user_id')?
+    # Assuming it's the roster owner ($5) for this example. Adjust if necessary.
+    # The schema screenshot shows columns: session_id, owner_user_id, player_id, league_id, user_id, insert_date
+    # It seems your primary key might be (session_id, player_id, league_id, user_id) where user_id=$5
+    # --- Please double-check your actual primary key or unique constraint ---
     sql = """
-        INSERT INTO dynastr.league_players 
+        INSERT INTO dynastr.league_players
         (session_id, owner_user_id, player_id, league_id, user_id, insert_date)
         VALUES ($1, $2, $3, $4, $5, $6)
-        ON CONFLICT (session_id, user_id, player_id, league_id)
-        DO UPDATE SET insert_date = EXCLUDED.insert_date;
+        ON CONFLICT (session_id, player_id, league_id, user_id) -- *** CHECK THIS TARGET ***
+        DO UPDATE SET owner_user_id = EXCLUDED.owner_user_id, insert_date = EXCLUDED.insert_date;
+        -- Consider updating owner_user_id ($2) as well if it can change for an existing player entry
     """
-    # Execute the batch insertion using executemany
-    async with db.transaction():
-        await db.executemany(sql, league_players)
-    return
 
+    try:
+        async with db.transaction():
+            await db.executemany(sql, league_players)
+            print(f"Successfully inserted/updated {len(league_players)} player entries for league {league_id}.")
+    except Exception as e:
+        print(f"Database error during bulk insert for league {league_id}: {e}")
+        # You might want to log more details here, e.g., the first few rows attempted
+        # print("First few rows attempted:", league_players[:5])
+        traceback.print_exc() # Print detailed traceback
+        raise # Re-raise the exception so the calling function knows about the failure
+
+    return
 
 async def total_owned_picks(
     db,
