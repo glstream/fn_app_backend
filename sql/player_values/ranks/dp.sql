@@ -33,6 +33,8 @@ COALESCE(REPLACE(REPLACE(player_full_name, 'Round ', ''), ' Pick ', '.')) as pla
 , TO_DATE(insert_date, 'YYYY-mm-DDTH:M:SS.z')-1 as _insert_date
 from dp_players
 where 1=1
-and player_full_name not like '%2023%' and player_full_name not like '%2022%'
+and player_full_name not like '%2024%' 
+and player_full_name not like '%2023%'
+and player_full_name not like '%2022%'
 and value > 0
 order by value desc

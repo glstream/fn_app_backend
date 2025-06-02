@@ -4,15 +4,21 @@ from fastapi import FastAPI, Depends
 from psycopg2 import extras
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware  # Import GZipMiddleware
 import aiofiles
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional
+# Add fastapi-cache imports
+from fastapi_cache import FastAPICache
+from fastapi_cache.backends.inmemory import InMemoryBackend
+from fastapi_cache.decorator import cache
 
 # UTILS
 from db import init_db_pool, close_db, get_db
 from superflex_models import UserDataModel, LeagueDataModel, RosterDataModel, RanksDataModel
-from utils import (get_user_id, insert_current_leagues, player_manager_rosters, insert_ranks_summary)
+from utils import (get_user_id, insert_current_leagues, player_manager_rosters, insert_ranks_summary,
+                   close_http_session)  # Import close_http_session
 
 # Load environment variables from .env file
 load_dotenv()
@@ -22,6 +28,10 @@ origins = [
 ]
 
 app = FastAPI()
+
+# Add GZipMiddleware first, it should be one of the first middlewares
+app.add_middleware(GZipMiddleware, minimum_size=1000)  # Compress responses larger than 1KB
+
 # Add CORSMiddleware to the application instance
 app.add_middleware(
     CORSMiddleware,
@@ -31,13 +41,23 @@ app.add_middleware(
     allow_headers=["*"],  # Allows all headers
 )
 
-#initialize the db pool
+# Define cache expiration time (7 days)
+CACHE_EXPIRATION = 60 * 60 * 24 * 7  # 7 days in seconds
+
+# Shorter cache for dynamic league data
+LEAGUE_CACHE_EXPIRATION = 60 * 60 * 2  # 2 hours in seconds
+
+# Initialize the db pool
 @app.on_event("startup")
 async def startup_event():
     await init_db_pool()
+    # Initialize FastAPICache with InMemoryBackend and a max_size
+    FastAPICache.init(InMemoryBackend(), prefix="fastapi-cache")
+    # The global aiohttp session will be initialized on its first use via get_http_session()
 
 @app.on_event("shutdown")
 async def shutdown_event():
+    await close_http_session()  # Close the global aiohttp session
     await close_db()
 
 
@@ -56,12 +76,15 @@ async def roster(roster_data: RosterDataModel, db=Depends(get_db)):
 @app.post("/ranks_summary")
 async def ranks_summary(ranks_data: RanksDataModel, db=Depends(get_db)):
     print('attempt ranks summary')
+    print(ranks_data)
     return await insert_ranks_summary(db, ranks_data)
 
 
-# GET ROUTES
+# GET ROUTES with caching
 @app.get("/leagues")
-async def leagues(league_year: str, user_name: str, guid: str, db=Depends(get_db)):
+@cache(expire=LEAGUE_CACHE_EXPIRATION)
+async def leagues(league_year: str, user_name: str, guid: str, db=Depends(get_db), _cb: Optional[str] = None, timestamp: Optional[str] = None):
+    # _cb and timestamp parameters can be used for cache busting from frontend
     # Get the user_id (ensure get_user_id is also an async function)
     user_id = await get_user_id(user_name)
     session_id = guid
@@ -75,9 +98,9 @@ async def leagues(league_year: str, user_name: str, guid: str, db=Depends(get_db
     async with aiofiles.open(sql_path, mode='r') as get_leagues_file:
         get_leagues_sql = await get_leagues_file.read()
         get_leagues_sql = (get_leagues_sql
-                           .replace("'session_id'", f"'{session_id}'")
-                           .replace("'user_id'", f"'{user_id}'")
-                           .replace("'league_year'", f"'{league_year}'"))
+                        .replace("'session_id'", f"'{session_id}'")
+                        .replace("'user_id'", f"'{user_id}'")
+                        .replace("'league_year'", f"'{league_year}'"))
 
     # Execute the query asynchronously and fetch results
     results = await db.fetch(get_leagues_sql)
@@ -85,6 +108,7 @@ async def leagues(league_year: str, user_name: str, guid: str, db=Depends(get_db
 
 
 @app.get("/get_user")
+@cache(expire=CACHE_EXPIRATION)
 async def get_user(user_name: str):
     user_id = await get_user_id(user_name)
     return {"user_id": user_id}
@@ -105,6 +129,25 @@ async def ranks(platform: str, db=Depends(get_db)):
     result = await db.fetch(player_values_sql)
     return result
 
+@app.get('/player_values')
+async def player_values(player_id: str, rank_type:str, db=Depends(get_db)):
+    # Ensure the SQL file exists and is readable
+    sql_path = Path.cwd() / "sql" / "player_values" / "card" / f"sf.sql"
+    if not sql_path.exists():
+        raise HTTPException(status_code=404, detail="SQL file not found")
+    
+    # Asynchronously read the SQL file
+    async with aiofiles.open(sql_path, mode='r') as player_values_file:
+        player_values_sql = await player_values_file.read()
+        player_values_sql =( player_values_sql
+                            .replace("'player_id'", f"'{player_id}'")
+                            .replace("'rank_type'", f"'{rank_type}'")
+                            )
+
+    # Execute the query asynchronously
+    result = await db.fetch(player_values_sql)
+    return result
+
 
 @app.get('/trade_calculator')
 async def trade_calculator(platform: str, rank_type: str, db=Depends(get_db)):
@@ -119,7 +162,9 @@ async def trade_calculator(platform: str, rank_type: str, db=Depends(get_db)):
 
 
 @app.get("/league_summary")
-async def league_summary(league_id: str, platform: str, rank_type: str, guid: str, roster_type: str, db=Depends(get_db)):
+@cache(expire=LEAGUE_CACHE_EXPIRATION)
+async def league_summary(league_id: str, platform: str, rank_type: str, guid: str, roster_type: str, db=Depends(get_db), timestamp: Optional[str] = None):
+    # timestamp parameter for cache busting
     session_id = guid
     league_type = 'sf_value' if roster_type == 'Superflex' else 'one_qb_value'
     rank_type = 'dynasty' if rank_type.lower() == 'dynasty' else 'redraft'
@@ -180,7 +225,9 @@ async def league_summary(league_id: str, platform: str, rank_type: str, guid: st
 
 
 @app.get("/league_detail")
-async def league_detail(league_id: str, platform: str, rank_type: str, guid: str, roster_type: str, db=Depends(get_db)):
+@cache(expire=LEAGUE_CACHE_EXPIRATION)
+async def league_detail(league_id: str, platform: str, rank_type: str, guid: str, roster_type: str, db=Depends(get_db), timestamp: Optional[str] = None):
+    # timestamp parameter for cache busting
     session_id = guid
     league_type = 'sf_value' if roster_type.lower() == 'superflex' else 'one_qb_value'
     rank_type = 'dynasty' if rank_type.lower() == 'dynasty' else 'redraft'
@@ -216,6 +263,7 @@ async def league_detail(league_id: str, platform: str, rank_type: str, guid: str
 
 
 @app.get("/trades_detail")
+@cache(expire=CACHE_EXPIRATION)
 async def trades_detail(league_id: str, platform: str, roster_type: str, league_year: str, rank_type: str, db=Depends(get_db)):
     league_type = 'sf_value' if roster_type == 'Superflex' else 'one_qb_value'
     rank_type = 'dynasty' if rank_type.lower() == 'dynasty' else 'redraft'
@@ -256,6 +304,7 @@ async def trades_detail(league_id: str, platform: str, roster_type: str, league_
 
 
 @app.get("/trades_summary")
+@cache(expire=CACHE_EXPIRATION)
 async def trades_summary(league_id: str, platform: str, roster_type: str, league_year: str, rank_type: str, db=Depends(get_db)):
     league_type = 'sf_value' if roster_type == 'Superflex' else 'one_qb_value'
     rank_type = 'dynasty' if rank_type.lower() == 'dynasty' else 'redraft'
@@ -284,6 +333,7 @@ async def trades_summary(league_id: str, platform: str, roster_type: str, league
 
 
 @app.get("/contender_league_summary")
+@cache(expire=CACHE_EXPIRATION)
 async def contender_league_summary(league_id: str, projection_source: str, guid: str, db=Depends(get_db)):
     print(league_id, projection_source)
 
@@ -306,6 +356,7 @@ async def contender_league_summary(league_id: str, projection_source: str, guid:
 
 
 @app.get("/contender_league_detail")
+@cache(expire=CACHE_EXPIRATION)
 async def contender_league_detail(league_id: str, projection_source: str, guid: str, db=Depends(get_db)):
     print(league_id, projection_source)
 
@@ -328,6 +379,7 @@ async def contender_league_detail(league_id: str, projection_source: str, guid: 
 
 
 @app.get("/best_available")
+@cache(expire=CACHE_EXPIRATION)
 async def best_available(league_id: str, platform: str, rank_type: str, guid: str, roster_type: str, db=Depends(get_db)):
     session_id = guid
     rank_type = 'dynasty' if rank_type.lower() == 'dynasty' else 'redraft'
@@ -358,20 +410,9 @@ async def best_available(league_id: str, platform: str, rank_type: str, guid: st
     return db_resp_obj
 
 
-
-# class Player(BaseModel):
-#     player_full_name: str
-#     position: str
-#     superflex_sf_value: float
-#     superflex_sf_rank: int
-#     superflex_sf_pos_rank: int
-#     superflex_one_qb_value: float
-#     superflex_one_qb_rank: int
-#     superflex_one_qb_pos_rank: int
-#     insert_date: Optional[str] = None
-
 @app.get("/v1/rankings")
-async def navigator_ranks_api(rank_type: str,  db=Depends(get_db)):
+@cache(expire=CACHE_EXPIRATION)
+async def navigator_ranks_api(rank_type: str, db=Depends(get_db)):
     rank_type = rank_type.lower()
     if rank_type not in ['dynasty', 'redraft']:
         raise HTTPException(status_code=400, detail="Invalid rank type")
@@ -389,6 +430,21 @@ async def navigator_ranks_api(rank_type: str,  db=Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    await close_db()
+
+# Add a route to clear the cache if needed
+@app.post("/clear_cache")
+async def clear_cache():
+    await FastAPICache.clear()  # Use await for async clear if provided by the library version
+    return {"message": "Cache cleared successfully"}
+
+# Add a route to clear specific league cache
+@app.post("/clear_league_cache")
+async def clear_league_cache(league_id: Optional[str] = None):
+    if league_id:
+        # In a real implementation, you'd clear specific cache keys
+        # For now, clear all cache - you might want to implement more specific clearing
+        await FastAPICache.clear()
+        return {"message": f"Cache cleared for league {league_id}"}
+    else:
+        await FastAPICache.clear()
+        return {"message": "All cache cleared"}

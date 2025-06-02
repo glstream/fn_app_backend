@@ -13,7 +13,9 @@ select player_full_name
 from dynastr.ktc_player_ranks ktc
 where 1=1
 and ktc.rank_type = 'redraft'
+and player_full_name not like '%2022%'
 and player_full_name not like '%2023%'
+and player_full_name not like '%2024%'
 and (sf_value > 0 AND one_qb_value > 0)		
 and rank_type = 'redraft'	
 and lower(position) not in ('k','dst')		 

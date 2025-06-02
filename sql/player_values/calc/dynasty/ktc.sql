@@ -14,6 +14,7 @@ from dynastr.ktc_player_ranks ktc
 where 1=1
 and ktc.rank_type = 'dynasty'
 and player_full_name not like '%2023%'
+and player_full_name NOT LIKE '%2024%'
 and (sf_value > 0 OR one_qb_value > 0)		
 and rank_type = 'dynasty'			 
 order by sf_value desc

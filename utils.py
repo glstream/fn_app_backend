@@ -7,23 +7,54 @@ from datetime import datetime
 import asyncio
 import aiohttp
 import traceback
+from fastapi_cache import FastAPICache
+from fastapi_cache.decorator import cache
+from typing import Optional
 
+# Define cache expiration time (7 days)
+CACHE_EXPIRATION = 60 * 60 * 24 * 7  # 7 days in seconds
 
+# Create shorter caching for dynamic data like trades and rosters
+SHORT_CACHE_EXPIRATION = 60 * 60 * 24  # 1 day in seconds
+
+# Even shorter cache for frequently changing league data
+LEAGUE_CACHE_EXPIRATION = 60 * 60 * 2  # 2 hours in seconds
+
+# Global aiohttp session
+_http_session: Optional[aiohttp.ClientSession] = None
+
+async def get_http_session() -> aiohttp.ClientSession:
+    """Initializes and returns a global aiohttp.ClientSession."""
+    global _http_session
+    if _http_session is None or _http_session.closed:
+        # You can configure connector settings here if needed, e.g., connection limits
+        connector = aiohttp.TCPConnector(limit_per_host=20, limit=100)  # Example limits
+        _http_session = aiohttp.ClientSession(connector=connector)
+    return _http_session
+
+async def close_http_session():
+    """Closes the global aiohttp.ClientSession."""
+    global _http_session
+    if _http_session and not _http_session.closed:
+        await _http_session.close()
+        _http_session = None
+
+@cache(expire=CACHE_EXPIRATION)
 async def make_api_call(url, params=None, headers=None, timeout=10, max_retries=5, backoff_factor=1):
-    async with aiohttp.ClientSession() as session:
-        for retry in range(max_retries):
-            try:
-                async with session.get(url, params=params, headers=headers, timeout=timeout) as response:
-                    response.raise_for_status()
-                    return await response.json()
-            except aiohttp.ClientError as e:
-                if retry < max_retries - 1:
-                    sleep_time = backoff_factor * (2 ** retry)
-                    print(f"Error while making API call: {e}. Retrying in {sleep_time} seconds...")
-                    await asyncio.sleep(sleep_time)
-                else:
-                    print(f"Error while making API call: {e}. Reached maximum retries ({max_retries}).")
-                    raise
+    session = await get_http_session()
+    for retry in range(max_retries):
+        try:
+            async with session.get(url, params=params, headers=headers, timeout=aiohttp.ClientTimeout(total=timeout)) as response:
+                response.raise_for_status()
+                return await response.json()
+        except aiohttp.ClientError as e:
+            if retry < max_retries - 1:
+                sleep_time = backoff_factor * (2 ** retry)
+                print(f"Error while making API call: {e}. Retrying in {sleep_time} seconds...")
+                await asyncio.sleep(sleep_time)
+            else:
+                print(f"Error while making API call: {e}. Reached maximum retries ({max_retries}).")
+                raise
 
 
 def dedupe(lst):
@@ -42,6 +73,7 @@ def round_suffix(rank: int) -> str:
     return f"{str(rank)}{ith}"
 
 
+@cache(expire=CACHE_EXPIRATION)
 async def get_user_id(user_name: str) -> str:
     try:
         user_url = f"https://api.sleeper.app/v1/user/{user_name}"
@@ -53,7 +85,7 @@ async def get_user_id(user_name: str) -> str:
         raise ConnectionError(f"Failed to fetch user data: {e}")
 
 
-
+@cache(expire=CACHE_EXPIRATION)
 async def get_user_name(user_id: str):
     try:
         username_url = f"https://api.sleeper.app/v1/user/{user_id}"
@@ -67,9 +99,9 @@ async def get_user_name(user_id: str):
         return None, None
 
 
-
-
-async def get_user_leagues(user_name: str, league_year: str) -> list:
+@cache(expire=LEAGUE_CACHE_EXPIRATION)
+async def get_user_leagues(user_name: str, league_year: str, timestamp: str = None) -> list:
+    # timestamp parameter for cache busting - not used in logic but affects cache key
     owner_id = await get_user_id(user_name)  # Ensure this call is awaited
     leagues_json = await make_api_call(
         f"https://api.sleeper.app/v1/user/{owner_id}/leagues/nfl/{league_year}"
@@ -110,7 +142,6 @@ async def get_user_leagues(user_name: str, league_year: str) -> list:
     return leagues
 
 
-
 async def clean_league_managers(db, league_id: str):
     delete_query = f"""
         DELETE FROM dynastr.managers 
@@ -121,7 +152,6 @@ async def clean_league_managers(db, league_id: str):
         # Execute the delete query asynchronously
         await db.execute(delete_query, league_id)
     return
-
 
 
 async def clean_league_rosters(db, session_id: str, league_id: str):
@@ -147,7 +177,6 @@ async def clean_league_picks(db, league_id: str, session_id: str) -> None:
     return
 
 
-
 async def clean_draft_positions(db, league_id: str):
     delete_query = """
         DELETE FROM dynastr.draft_positions 
@@ -159,8 +188,9 @@ async def clean_draft_positions(db, league_id: str):
     return
 
 
-
-async def get_managers(league_id: str) -> list:
+@cache(expire=LEAGUE_CACHE_EXPIRATION)
+async def get_managers(league_id: str, timestamp: str = None) -> list:
+    # timestamp parameter for cache busting
     url = f"https://api.sleeper.app/v1/league/{league_id}/users"
     res = await make_api_call(url)  # Ensure this call is asynchronous
     manager_data = [
@@ -170,25 +200,30 @@ async def get_managers(league_id: str) -> list:
     return manager_data
 
 
-async def get_league_rosters_size(league_id: str) -> int:
+@cache(expire=LEAGUE_CACHE_EXPIRATION)
+async def get_league_rosters_size(league_id: str, timestamp: str = None) -> int:
+    # timestamp parameter for cache busting
     url = f"https://api.sleeper.app/v1/league/{league_id}"
     league_res = await make_api_call(url)  # Using the async version of make_api_call
     return league_res["total_rosters"]
 
 
-
-async def get_league_rosters(league_id: str) -> list:
+async def get_league_rosters(league_id: str, timestamp: str = None) -> list:
+    # Remove cache decorator to make this always fresh for roster refreshes
     url = f"https://api.sleeper.app/v1/league/{league_id}/rosters"
     rosters = await make_api_call(url)
     return rosters
 
-async def get_traded_picks(league_id: str) -> list:
+
+@cache(expire=LEAGUE_CACHE_EXPIRATION)
+async def get_traded_picks(league_id: str, timestamp: str = None) -> list:
+    # timestamp parameter for cache busting
     url = f"https://api.sleeper.app/v1/league/{league_id}/traded_picks"
     total_res = await make_api_call(url)  # Using the async version of make_api_call
     return total_res
 
 
-
+@cache(expire=CACHE_EXPIRATION)
 async def get_draft_id(league_id: str) -> dict:
     url = f"https://api.sleeper.app/v1/league/{league_id}/drafts"
     draft_res = await make_api_call(url)  # Using the async version of make_api_call
@@ -199,13 +234,14 @@ async def get_draft_id(league_id: str) -> dict:
         raise ValueError("No draft data found for the given league ID.")
 
 
-
+@cache(expire=CACHE_EXPIRATION)
 async def get_draft(draft_id: str):
     draft_res_url = f"https://api.sleeper.app/v1/draft/{draft_id}"
     draft_res = await make_api_call(draft_res_url)
     return draft_res
 
 
+@cache(expire=CACHE_EXPIRATION)
 async def get_roster_ids(league_id: str) -> list:
     try:
         roster_meta_url = f"https://api.sleeper.app/v1/league/{league_id}/rosters"
@@ -216,7 +252,7 @@ async def get_roster_ids(league_id: str) -> list:
         return []  # or re-raise the exception depending on how you want to handle errors
 
 
-
+@cache(expire=SHORT_CACHE_EXPIRATION)
 async def get_full_league(league_id: str):
     l_res_url = f"https://api.sleeper.app/v1/league/{league_id}/rosters"
     l_res = await make_api_call(l_res_url)
@@ -243,6 +279,7 @@ async def insert_ranks_summary(db, ranks_data: RanksDataModel):
         ON CONFLICT (user_id, league_id ) 
         DO UPDATE 
         SET 
+            updatetime = CURRENT_TIMESTAMP,
             {rank_source}_power_rank = EXCLUDED.{rank_source}_power_rank,
             {rank_source}_starters_rank = EXCLUDED.{rank_source}_starters_rank,
             {rank_source}_bench_rank = EXCLUDED.{rank_source}_bench_rank,
@@ -256,17 +293,17 @@ async def insert_ranks_summary(db, ranks_data: RanksDataModel):
     return
 
 
-
-
 async def insert_current_leagues(db, user_data: UserDataModel):
-    
     user_name = user_data.user_name
     league_year = user_data.league_year
+
+    # Pass timestamp for cache busting if refresh was triggered
+    timestamp = getattr(user_data, 'timestamp', None)
     
     # Execute synchronous code asynchronously
-    leagues = await get_user_leagues(user_name, league_year)
+    leagues = await get_user_leagues(user_name, league_year, timestamp)
     user_id = await get_user_id(user_name)
-    
+
     session_id = user_data.guid
     entry_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f%z")
 
@@ -343,95 +380,7 @@ async def insert_current_leagues(db, user_data: UserDataModel):
     except Exception as e:
         print(f"Failed to update current leagues: {e}")
         traceback.print_exc() 
-        raise  # Optionall
-
-# def insert_league(db, league_data: LeagueDataModel):
-#     print('executing')
-#     user_id = "342397313982976000"
-#     entry_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f%z")
-#     session_id = 'cc73437c-40b6-4cd4-9835-6b41033968c4'
-#     league_single = make_api_call(
-#         f"https://api.sleeper.app/v1/league/{league_data.league_id}")
-#     try:
-#         qbs = len([i for i in league_single["roster_positions"] if i == "QB"])
-#         rbs = len([i for i in league_single["roster_positions"] if i == "RB"])
-#         wrs = len([i for i in league_single["roster_positions"] if i == "WR"])
-#         tes = len([i for i in league_single["roster_positions"] if i == "TE"])
-#         flexes = len(
-#             [i for i in league_single["roster_positions"] if i == "FLEX"])
-#         super_flexes = len(
-#             [i for i in league_single["roster_positions"] if i == "SUPER_FLEX"]
-#         )
-#         rec_flexes = len(
-#             [i for i in league_single["roster_positions"] if i == "REC_FLEX"]
-#         )
-#     except Exception as e:
-#         print(f"An error occurred: {e} on league_single call, session_id: {session_id}, user_id: {user_id}, league_id:{league_data.league_id}")
-
-#     starters = sum([qbs, rbs, wrs, tes, flexes, super_flexes, rec_flexes])
-#     user_name = get_user_name(user_id)[1]
-#     cursor = db.cursor()
-#     # Execute an INSERT statement
-#     cursor.execute(
-#         """
-#     INSERT INTO dynastr.current_leagues 
-#     (session_id, user_id, user_name, league_id, league_name, avatar, total_rosters, qb_cnt, rb_cnt, wr_cnt, te_cnt, flex_cnt, sf_cnt, starter_cnt, total_roster_cnt, sport, insert_date, rf_cnt, league_cat, league_year, previous_league_id, league_status) 
-#     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-#     ON CONFLICT (session_id, league_id) DO UPDATE 
-#     SET user_id = excluded.user_id,
-#   		user_name = excluded.user_name,
-# 		league_id = excluded.league_id,
-# 		league_name = excluded.league_name,
-# 		avatar = excluded.avatar,
-# 		total_rosters = excluded.total_rosters,
-# 		qb_cnt = excluded.qb_cnt,
-# 		rb_cnt = excluded.rb_cnt,
-# 		wr_cnt = excluded.wr_cnt,
-# 		te_cnt = excluded.te_cnt,
-# 		flex_cnt = excluded.flex_cnt,
-# 		sf_cnt = excluded.sf_cnt,
-# 		starter_cnt = excluded.starter_cnt,
-# 		total_roster_cnt = excluded.total_roster_cnt,
-# 		sport = excluded.sport,
-#       	insert_date = excluded.insert_date,
-#         rf_cnt = excluded.rf_cnt,
-#         league_cat = excluded.league_cat,
-#         league_year = excluded.league_year,
-#         previous_league_id = excluded.previous_league_id,
-#         league_status = excluded.league_status;""",
-#         (
-#             session_id,
-#             user_id,
-#             user_name,
-#             league_data.league_id,
-#             league_single["name"],
-#             league_single["avatar"],
-#             league_single["total_rosters"],
-#             qbs,
-#             rbs,
-#             wrs,
-#             tes,
-#             flexes,
-#             super_flexes,
-#             starters,
-#             len(league_single["roster_positions"]),
-#             league_single["sport"],
-#             entry_time,
-#             rec_flexes,
-#             league_single["settings"]["type"],
-#             league_single["season"],
-#             league_single["previous_league_id"],
-#             league_single["status"],
-#         ),
-#     )
-
-#     # Commit the transaction
-#     db.commit()
-
-#     # Close the cursor and connection
-#     cursor.close()
-
-#     return
+        raise
 
 
 async def insert_managers(db, managers: list):
@@ -455,40 +404,22 @@ async def insert_managers(db, managers: list):
     return
 
 
-
-async def insert_league_rosters(db, session_id: str, user_id: str, league_id: str) -> None:
+async def insert_league_rosters(db, session_id: str, user_id: str, league_id: str, timestamp: str = None) -> None:
     entry_time = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f%z")
-    rosters = await get_league_rosters(league_id)
+    rosters = await get_league_rosters(league_id, timestamp)
 
     league_players = []
-     
 
-    # --- *** IMPORTANT: Define a valid placeholder *** ---
-    # Choose a value that is:
-    # 1. Compatible with your `league_players.user_id` column data type (e.g., string, integer, UUID).
-    # 2. Not NULL.
-    # 3. Preferably distinct from any real owner IDs.
-    # Examples:
-    # PLACEHOLDER_OWNER_ID = "UNKNOWN_OWNER"  # If user_id is VARCHAR/TEXT
-    # PLACEHOLDER_OWNER_ID = "0"               # If user_id is VARCHAR/TEXT or potentially INT/BIGINT (if 0 is never a real ID)
-    # PLACEHOLDER_OWNER_ID = 0                 # If user_id is INT/BIGINT (if 0 is never a real ID)
-    # PLACEHOLDER_OWNER_ID = -1                # If user_id is INT/BIGINT (if -1 is never a real ID)
-    # PLACEHOLDER_OWNER_ID = "00000000-0000-0000-0000-000000000000" # If user_id is UUID
-    # --- CHOOSE THE CORRECT ONE FOR YOUR SCHEMA ---
     PLACEHOLDER_OWNER_ID = "UNKNOWN_OWNER" 
     unknown_owner_counter = 1
 
     for roster in rosters:
-        # Explicitly get owner_id, which might be None
         raw_owner_id = roster.get("owner_id")
-
-        # Substitute with placeholder if owner_id is None
         owner_id_to_insert = raw_owner_id if raw_owner_id is not None else PLACEHOLDER_OWNER_ID
 
-        # Log if a placeholder is being used (optional, but helpful for debugging)
         if raw_owner_id is None:
             placeholder_id = f"UNKNOWN_OWNER_{unknown_owner_counter}"
-            owner_id_to_insert = placeholder_id # Use the constructed placeholder
+            owner_id_to_insert = placeholder_id
             
             roster_id_for_log = roster.get("roster_id", "N/A")
             print(f"Using placeholder '{PLACEHOLDER_OWNER_ID}' for missing owner_id on roster {roster_id_for_log} in league {league_id}.")
@@ -519,27 +450,17 @@ async def insert_league_rosters(db, session_id: str, user_id: str, league_id: st
         except KeyError as e:
             roster_id_for_log = roster.get("roster_id", "N/A")
             print(f"KeyError {e} processing player data for roster {roster_id_for_log}. Skipping player append.")
-            # Consider if you need to continue the outer loop here
 
     if not league_players:
         print(f"No valid player data found to insert for league {league_id} and session {session_id}.")
-        return # Avoid trying to insert an empty list
+        return
 
-    # --- Verify ON CONFLICT Target ---
-    # Make sure the columns listed in your ON CONFLICT target match a unique constraint or primary key.
-    # Based on your previous message, the PK might be (session_id, user_id, player_id, league_id).
-    # BUT: Which user_id? The requesting user ($2 'owner_user_id') or the roster owner ($5 'user_id')?
-    # Assuming it's the roster owner ($5) for this example. Adjust if necessary.
-    # The schema screenshot shows columns: session_id, owner_user_id, player_id, league_id, user_id, insert_date
-    # It seems your primary key might be (session_id, player_id, league_id, user_id) where user_id=$5
-    # --- Please double-check your actual primary key or unique constraint ---
     sql = """
         INSERT INTO dynastr.league_players
         (session_id, owner_user_id, player_id, league_id, user_id, insert_date)
         VALUES ($1, $2, $3, $4, $5, $6)
-        ON CONFLICT (session_id, player_id, league_id, user_id) -- *** CHECK THIS TARGET ***
+        ON CONFLICT (session_id, player_id, league_id, user_id)
         DO UPDATE SET owner_user_id = EXCLUDED.owner_user_id, insert_date = EXCLUDED.insert_date;
-        -- Consider updating owner_user_id ($2) as well if it can change for an existing player entry
     """
 
     try:
@@ -548,12 +469,11 @@ async def insert_league_rosters(db, session_id: str, user_id: str, league_id: st
             print(f"Successfully inserted/updated {len(league_players)} player entries for league {league_id}.")
     except Exception as e:
         print(f"Database error during bulk insert for league {league_id}: {e}")
-        # You might want to log more details here, e.g., the first few rows attempted
-        # print("First few rows attempted:", league_players[:5])
-        traceback.print_exc() # Print detailed traceback
-        raise # Re-raise the exception so the calling function knows about the failure
+        traceback.print_exc()
+        raise
 
     return
+
 
 async def total_owned_picks(
     db,
@@ -609,7 +529,6 @@ async def total_owned_picks(
                     for pick in picks
                 ]
 
-                # Execute the batch insertion using executemany
                 sql = """
                     INSERT INTO dynastr.draft_picks (year, round, round_name, roster_id, owner_id, league_id, draft_id, session_id)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -619,6 +538,7 @@ async def total_owned_picks(
                 async with db.transaction():
                     await db.executemany(sql, draft_picks)
     return
+
 
 async def draft_positions(db, league_id: str, user_id: str, draft_order: list = None) -> None:
     if draft_order is None:
@@ -662,7 +582,6 @@ async def draft_positions(db, league_id: str, user_id: str, draft_order: list = 
             owner_id = draft_order_.get(int(draft_position), "Empty")
             draft_order.append([str(season), str(rounds), str(draft_position), str(position_name), str(roster_id), str(owner_id), str(league_id), str(draft_id["draft_id"]), str(draft_set)])
 
-    # Execute the batch insertion asynchronously
     sql = """
         INSERT INTO dynastr.draft_positions (season, rounds, position, position_name, roster_id, user_id, league_id, draft_id, draft_set_flg)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -683,7 +602,6 @@ async def clean_player_trades(db, league_id: str) -> None:
         DELETE FROM dynastr.player_trades 
         WHERE league_id = $1;
     """
-    # Execute the delete query asynchronously within a transaction
     async with db.transaction():
         await db.execute(delete_query, league_id)
     return
@@ -694,13 +612,12 @@ async def clean_draft_trades(db, league_id: str) -> None:
         DELETE FROM dynastr.draft_pick_trades 
         WHERE league_id = $1;
     """
-    # Execute the delete query asynchronously within a transaction
     async with db.transaction():
         await db.execute(delete_query, league_id)
     return
 
 
-
+@cache(expire=SHORT_CACHE_EXPIRATION)
 async def get_trades(league_id: str, nfl_state: dict, year_entered: str) -> list:
     leg = max(nfl_state.get("leg", 1), 1)
     all_trades = []
@@ -713,7 +630,7 @@ async def get_trades(league_id: str, nfl_state: dict, year_entered: str) -> list
     if nfl_state["season_type"] != "off":
         tasks = [fetch_week_transactions(week) for week in range(1, leg + 1)]
     elif year_entered != nfl_state["season"]:
-        tasks = [fetch_week_transactions(week) for week in range(1, 18)]  # Assuming 17 weeks in the NFL season
+        tasks = [fetch_week_transactions(week) for week in range(1, 18)]
     else:
         tasks = [fetch_week_transactions(1)]
 
@@ -721,7 +638,7 @@ async def get_trades(league_id: str, nfl_state: dict, year_entered: str) -> list
     return all_trades
 
 
-
+@cache(expire=SHORT_CACHE_EXPIRATION)
 async def get_sleeper_state() -> str:
     try:
         url = "https://api.sleeper.app/v1/state/nfl"
@@ -729,8 +646,7 @@ async def get_sleeper_state() -> str:
         return state
     except Exception as e:
         print(f"Error fetching NFL state from Sleeper API: {e}")
-        raise  # Optionally, re-raise the exception or handle it more gracefully
-
+        raise
 
 
 async def insert_trades(db, trades: dict, league_id: str) -> None:
@@ -777,17 +693,24 @@ async def insert_trades(db, trades: dict, league_id: str) -> None:
                 draft_picks_ = [v for k, v in pick.items()]
 
                 if draft_picks_:
-                    suffix = round_suffix(draft_picks_[1])
+                    try:
+                        round_number = int(draft_picks_[1])
+                        suffix = round_suffix(round_number)
+                    except (ValueError, TypeError):
+                        # Handle cases where conversion fails (e.g., None or non-numeric string)
+                        print(f"Warning: Could not determine round suffix for pick data: {draft_picks_}. Skipping suffix.")
+                        suffix = "" # Or some default/error indicator
+                        
                     draft_adds_db.append(
                         [
                             str(trade["transaction_id"]),
                             str(trade["status_updated"]),
-                            str(draft_picks_[4]),
+                            str(draft_picks_[4]), # roster_id for adds
                             "add",
-                            str(draft_picks_[0]),
-                            str(draft_picks_[1]),
-                            str(suffix),
-                            str(draft_picks_[2]),
+                            str(draft_picks_[0]), # season
+                            str(draft_picks_[1]), # round
+                            str(suffix), # round_suffix
+                            str(draft_picks_[2]), # org_owner_id
                             str(league_id),
                         ]
                     )
@@ -795,12 +718,12 @@ async def insert_trades(db, trades: dict, league_id: str) -> None:
                         [
                             str(trade["transaction_id"]),
                             str(trade["status_updated"]),
-                            draft_picks_[3],
+                            str(draft_picks_[3]), # roster_id for drops - Ensure this is a string
                             "drop",
-                            str(draft_picks_[0]),
-                            str(draft_picks_[1]),
-                            str(suffix),
-                            str(draft_picks_[2]),
+                            str(draft_picks_[0]), # season
+                            str(draft_picks_[1]), # round
+                            str(suffix), # round_suffix
+                            str(draft_picks_[2]), # org_owner_id
                             str(league_id),
                         ]
                     )
@@ -810,20 +733,19 @@ async def insert_trades(db, trades: dict, league_id: str) -> None:
     player_drops_db = dedupe(player_drops_db)
     draft_drops_db = dedupe(draft_drops_db)
 
-    # Use asyncpg's executemany for batch operations within a transaction
     async with db.transaction():
         draft_adds_query = """
             INSERT INTO dynastr.draft_pick_trades (transaction_id, status_updated, roster_id, transaction_type, season, round, round_suffix, org_owner_id, league_id)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             ON CONFLICT DO NOTHING;
         """
-        draft_drops_query = draft_adds_query  # Same structure
+        draft_drops_query = draft_adds_query
         player_adds_query = """
             INSERT INTO dynastr.player_trades (transaction_id, status_updated, roster_id, transaction_type, player_id, league_id)
             VALUES ($1, $2, $3, $4, $5, $6)
             ON CONFLICT DO NOTHING;
         """
-        player_drops_query = player_adds_query  # Same structure
+        player_drops_query = player_adds_query
 
         await db.executemany(draft_adds_query, draft_adds_db)
         await db.executemany(draft_drops_query, draft_drops_db)
@@ -833,7 +755,6 @@ async def insert_trades(db, trades: dict, league_id: str) -> None:
     return
 
 
-
 async def player_manager_rosters(db, roster_data: RosterDataModel):
     session_id = roster_data.guid
     user_id = roster_data.user_id
@@ -841,8 +762,10 @@ async def player_manager_rosters(db, roster_data: RosterDataModel):
     year_entered = roster_data.league_year
     startup = False
 
+    # Get timestamp for cache busting
+    timestamp = getattr(roster_data, 'timestamp', None)
+
     try:
-        # Perform cleaning operations
         print("performing roster cleaning operations")
         await clean_league_managers(db, league_id)
         await clean_league_rosters(db, session_id, league_id)
@@ -853,18 +776,15 @@ async def player_manager_rosters(db, roster_data: RosterDataModel):
         return e
     try:
         print("fetching managers")
-        # Fetch managers and insert them
-        managers = await get_managers(league_id) 
+        managers = await get_managers(league_id, timestamp) 
         await insert_managers(db, managers) 
     except Exception as e:
         print('issue2', e)
         return e
     
-        
     try:
         print("Inserting rosters and managing picks")
-        # Insert rosters and manage picks
-        await insert_league_rosters(db, session_id, user_id, league_id)
+        await insert_league_rosters(db, session_id, user_id, league_id, timestamp)
     except Exception as e:
         print('issue3', e)
         return e    
@@ -873,18 +793,14 @@ async def player_manager_rosters(db, roster_data: RosterDataModel):
     await total_owned_picks(db, league_id, session_id, startup)
     await draft_positions(db, league_id, user_id)
 
-   
-
     try:
         print("cleaning trades")
-        # Handle trades
         await clean_player_trades(db, league_id)
         await clean_draft_trades(db, league_id)
     except Exception as e:
         print('issue4', e)
         return e
     try:
-        # Get trades and insert them
         trades = await get_trades(league_id, await get_sleeper_state(), year_entered)
     except Exception as e:
         print('issue5', e)
@@ -894,5 +810,5 @@ async def player_manager_rosters(db, roster_data: RosterDataModel):
         await insert_trades(db, trades, league_id)
     except Exception as e:
         print(f"Issue: {e}")
-        traceback.print_exc()  # This prints the stack trace to stdout
+        traceback.print_exc()
         return e

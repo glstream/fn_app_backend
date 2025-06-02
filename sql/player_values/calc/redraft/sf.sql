@@ -12,15 +12,23 @@ SELECT
   sf.superflex_one_qb_value::int as one_qb_value, -- Casting to int
   sf.superflex_one_qb_rank::int as one_qb_rank, -- Casting to int
   sf.insert_date,
-  sf.ktc_player_id as player_id
+  sf.ktc_player_id as player_id,
+  ktc.rookie as is_rookie
   
 FROM
   dynastr.sf_player_ranks sf
 left JOIN dynastr.players p ON sf.player_full_name = p.full_name
+left join dynastr.ktc_player_ranks ktc on sf.ktc_player_id = ktc.ktc_player_id
 WHERE
-  sf.player_full_name NOT LIKE '%2023%'
+  sf.player_full_name NOT LIKE '%2022%'
+  and sf.player_full_name NOT LIKE '%2023%'
+  and sf.player_full_name NOT LIKE '%2024%'
+  and sf.player_full_name NOT LIKE '%2025%'
+  and sf.player_full_name NOT LIKE '%2026%'
+  and sf.player_full_name NOT LIKE '%2027%'
   AND (sf.superflex_sf_value > 0 OR sf.superflex_one_qb_value > 0)
-  and rank_type = 'redraft'
+  and sf.rank_type = 'redraft'
+  and ktc.rank_type = 'redraft'
   and _position not in ('K', 'DEF', 'Pick')
 ORDER BY
   sf.superflex_sf_value DESC

@@ -36,11 +36,11 @@ WITH base_players as (SELECT
                                     al.user_id
                                     , al.season
                                     , al.year 
-                                     , CASE WHEN (dname.position::integer) < 13 and al.draft_set_flg = 'Y' and al.year = dname.season
-                                                THEN al.year || ' Round ' || al.round || ' Pick ' || dname.position
-                                            WHEN (dname.position::integer) > 12 and al.draft_set_flg = 'Y' and al.year = dname.season
-                                                THEN al.year || ' ' || dname.position_name || ' ' || al.round_name 
-                                            ELSE al.year|| ' Mid ' || al.round_name 
+                                    , CASE WHEN (dname.position::integer) < 5 and al.draft_set_flg = 'Y' and al.year = dname.season
+                                                THEN al.year || ' Early ' || al.round_name
+                                            WHEN (dname.position::integer) < 9 and al.draft_set_flg = 'Y' and al.year = dname.season
+                                                THEN al.year || ' Mid ' || al.round_name
+                                            ELSE al.year|| ' Late ' || al.round_name 
                                             END AS player_full_name 
                                     FROM (                           
                                         SELECT dp.roster_id
@@ -246,4 +246,7 @@ WITH base_players as (SELECT
                     inner join dynastr.managers m on tp.user_id = m.user_id 
                     where 1=1
                     and sf.rank_type = 'rank_type'
-                    order by player_value desc
+                    order by 
+                    
+					player_value desc,
+                    CASE WHEN tp.player_position = 'PICKS' THEN tp.draft_year END ASC

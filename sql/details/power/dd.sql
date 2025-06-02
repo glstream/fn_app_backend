@@ -269,4 +269,6 @@ WITH base_players as (SELECT
                     inner join dynastr.managers m on tp.user_id = m.user_id 
                     where 1=1
                     and dd.rank_type = 'rank_type'
-                    order by player_value desc
+                    order by 
+					player_value desc,
+                    CASE WHEN tp.player_position = 'PICKS' THEN tp.draft_year END ASC

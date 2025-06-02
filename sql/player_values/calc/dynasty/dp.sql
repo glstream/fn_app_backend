@@ -14,5 +14,6 @@ from dynastr.dp_player_ranks
 where 1=1
 and player_full_name not like '%2023%'
 and player_full_name not like '%2022%'
+and player_full_name not like '%2024%'
 and (sf_value > 0 OR one_qb_value > 0)					 
 order by sf_value desc

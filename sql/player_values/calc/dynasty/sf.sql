@@ -20,7 +20,8 @@ SELECT
   pre.one_qb_value,
   pre.one_qb_rank,
   pre.insert_date,
-  pre.player_id
+  pre.player_id,
+  pre.is_rookie
 FROM (
   SELECT
     sf.player_full_name,
@@ -36,14 +37,20 @@ FROM (
     sf.superflex_one_qb_value::int as one_qb_value,
     sf.superflex_one_qb_rank::int as one_qb_rank,
     sf.insert_date,
-    sf.ktc_player_id as player_id
+    sf.ktc_player_id as player_id,
+	ktc.rookie as is_rookie
   FROM
     dynastr.sf_player_ranks sf
   LEFT JOIN dynastr.players p ON sf.player_full_name = p.full_name
+  LEFT JOIN (select * from dynastr.ktc_player_ranks where rank_type = 'dynasty') ktc on sf.ktc_player_id = ktc.ktc_player_id
   WHERE
-    sf.player_full_name NOT LIKE '%2023%'
+   sf.player_full_name NOT LIKE '%2024%'
+    AND sf.player_full_name NOT LIKE '%2023%'
+    AND sf.player_full_name NOT LIKE '%2022%'
+    AND sf.player_full_name NOT LIKE '%2021%'
     AND (sf.superflex_sf_value > 0 OR sf.superflex_one_qb_value > 0)
-    AND rank_type = 'dynasty'
+    AND sf.rank_type = 'dynasty'
 ) pre
+
 ORDER BY
-  pre.sf_value DESC;
+  pre.sf_value DESC

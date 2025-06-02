@@ -24,3 +24,4 @@ asyncpg
 aiofiles==23.2.1
 asyncio==3.4.3
 aiohttp==3.9.5
+fastapi-cache2==0.2.1

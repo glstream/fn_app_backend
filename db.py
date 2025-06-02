@@ -24,8 +24,12 @@ async def init_db_pool():
         user=user,
         password=password,
         ssl=sslmode,
-        command_timeout=60
+        command_timeout=60,
+        min_size=5,  # Minimum number of connections in the pool
+        max_size=20, # Maximum number of connections in the pool
+        max_inactive_connection_lifetime=300 # Connections inactive for 5 mins are closed
     )
+    logger.info("Database connection pool initialized with min_size=5, max_size=20.")
 
 async def get_db():
     global pool
@@ -43,4 +47,7 @@ async def get_db():
 
 async def close_db():
     global pool
-    await pool.close()
+    if pool: # Check if pool exists before trying to close
+        await pool.close()
+        logger.info("Database connection pool closed.")
+    pool = None

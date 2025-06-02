@@ -173,6 +173,7 @@ WITH base_players as (SELECT
                     ,lower(p.first_name) as first_name
 					,lower(p.last_name) as last_name
                     ,fc.fc_player_id as hyper_link
+                    ,tp.draft_year
                     ,p.team
                     ,p.age
                     ,tp.player_id as sleeper_id
@@ -186,7 +187,7 @@ WITH base_players as (SELECT
                             ,ap.player_id
                             ,ap.fc_player_id
                             ,ap.player_full_name
-                            , NULL as pick_year
+                            , NULL as draft_year
                             ,ap.player_position 
                             ,ap.fantasy_position
                             ,'STARTER' as fantasy_designation
@@ -210,7 +211,7 @@ WITH base_players as (SELECT
                             ,null as player_id
                             ,picks.fc_player_id
                             ,picks.player_full_name as player_full_name
-                            ,picks.year as pick_year
+                            ,picks.year as draft_year
                             ,'PICKS' as player_position 
                             ,'PICKS' as fantasy_position
                             ,'PICKS' as fantasy_designation
@@ -253,4 +254,8 @@ WITH base_players as (SELECT
                     inner join dynastr.managers m on tp.user_id = m.user_id 
                     where 1=1
                     and fc.rank_type = 'dynasty'
-                    order by player_value desc, tp.player_full_name	asc	
+                    order by 
+                  
+					player_value desc, 
+                    CASE WHEN tp.player_position = 'PICKS' THEN tp.draft_year END ASC,
+                    tp.player_full_name	asc	
