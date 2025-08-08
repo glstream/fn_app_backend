@@ -22,8 +22,8 @@ WITH base_players AS (
     FROM dynastr.league_players lp
     INNER JOIN dynastr.players pl ON lp.player_id = pl.player_id
     INNER JOIN dynastr.current_leagues cl ON lp.league_id = cl.league_id AND cl.session_id = 'session_id'
-    -- OPTIMIZED: Use ktc_player_id instead of full_name for much faster joins
-    LEFT JOIN dynastr.sf_player_ranks sf ON sf.ktc_player_id = pl.player_id AND sf.rank_type = 'rank_type'
+    -- Join using player full name for SF rankings
+    LEFT JOIN dynastr.sf_player_ranks sf ON sf.player_full_name = pl.full_name AND sf.rank_type = 'rank_type'
     WHERE lp.session_id = 'session_id'
         AND lp.league_id = 'league_id'
         AND pl.player_position IN ('QB', 'RB', 'WR', 'TE')
