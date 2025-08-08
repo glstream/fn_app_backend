@@ -201,6 +201,7 @@ WITH base_players as (SELECT
                     ,p.age
                     ,p.team
                     ,tp.player_id as sleeper_id
+                    ,sf.ktc_player_id
                     ,tp.player_position
                     ,tp.fantasy_position
                     ,tp.fantasy_designation
