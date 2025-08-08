@@ -69,8 +69,27 @@ async def user_details(user_data: UserDataModel, db=Depends(get_db)):
 
 @app.post("/roster")
 async def roster(roster_data: RosterDataModel, db=Depends(get_db)):
-    print('attempt rosters')
-    return await player_manager_rosters(db, roster_data)
+    print(f'attempt rosters for league: {roster_data.league_id}')
+    try:
+        print(f"Roster data received: {roster_data.dict()}")
+        result = await player_manager_rosters(db, roster_data)
+        print(f"player_manager_rosters result: {result}")
+        
+        # Check if the result indicates an error
+        if isinstance(result, dict) and result.get("status") == "error":
+            print(f"Function returned error status: {result}")
+            raise HTTPException(status_code=500, detail=result.get("message", "Failed to update rosters"))
+        
+        print("Roster operation completed successfully")
+        return result
+    except HTTPException:
+        print("Re-raising HTTPException")
+        raise  # Re-raise HTTP exceptions
+    except Exception as e:
+        print(f"Unexpected error in roster endpoint: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Failed to update rosters. Data shown might be outdated.")
 
 
 @app.post("/ranks_summary")

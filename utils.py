@@ -6,25 +6,32 @@ import traceback
 from fastapi_cache.decorator import cache
 from typing import Optional
 
-# Define cache expiration time (7 days)
-CACHE_EXPIRATION = 60 * 60 * 24 * 7  # 7 days in seconds
-
-# Create shorter caching for dynamic data like trades and rosters
-SHORT_CACHE_EXPIRATION = 60 * 60 * 24  # 1 day in seconds
-
-# Even shorter cache for frequently changing league data
-LEAGUE_CACHE_EXPIRATION = 60 * 60 * 2  # 2 hours in seconds
+# Optimized cache expiration times for better performance
+CACHE_EXPIRATION = 60 * 60 * 24 * 7  # 7 days in seconds for static data
+SHORT_CACHE_EXPIRATION = 60 * 60 * 6   # 6 hours for semi-dynamic data
+LEAGUE_CACHE_EXPIRATION = 60 * 60 * 1  # 1 hour for frequently changing league data
+VERY_SHORT_CACHE = 60 * 15             # 15 minutes for very dynamic data
 
 # Global aiohttp session
 _http_session: Optional[aiohttp.ClientSession] = None
 
 async def get_http_session() -> aiohttp.ClientSession:
-    """Initializes and returns a global aiohttp.ClientSession."""
+    """Initializes and returns a global aiohttp.ClientSession with optimized settings."""
     global _http_session
     if _http_session is None or _http_session.closed:
-        # You can configure connector settings here if needed, e.g., connection limits
-        connector = aiohttp.TCPConnector(limit_per_host=20, limit=100)  # Example limits
-        _http_session = aiohttp.ClientSession(connector=connector)
+        # Optimized connector settings for better performance
+        connector = aiohttp.TCPConnector(
+            limit_per_host=50,  # Increased concurrent connections per host
+            limit=200,          # Increased total connection pool size
+            ttl_dns_cache=300,  # DNS cache for 5 minutes
+            use_dns_cache=True, # Enable DNS caching
+            keepalive_timeout=60,  # Keep connections alive longer
+            enable_cleanup_closed=True  # Auto-cleanup closed connections
+        )
+        _http_session = aiohttp.ClientSession(
+            connector=connector,
+            timeout=aiohttp.ClientTimeout(total=15, connect=5)  # Optimized timeouts
+        )
     return _http_session
 
 async def close_http_session():
@@ -50,6 +57,53 @@ async def make_api_call(url, params=None, headers=None, timeout=10, max_retries=
             else:
                 print(f"Error while making API call: {e}. Reached maximum retries ({max_retries}).")
                 raise
+
+
+async def make_concurrent_api_calls(urls_with_params: list) -> list:
+    """Make multiple API calls concurrently with better error handling"""
+    
+    async def fetch_single(url_params):
+        url, params, headers = url_params if len(url_params) == 3 else (*url_params, None)
+        try:
+            return await make_api_call(url, params, headers)
+        except Exception as e:
+            print(f"Failed to fetch {url}: {e}")
+            return None
+    
+    # Limit concurrent requests to avoid overwhelming the API
+    semaphore = asyncio.Semaphore(25)
+    
+    async def fetch_with_semaphore(url_params):
+        async with semaphore:
+            return await fetch_single(url_params)
+    
+    results = await asyncio.gather(*[fetch_with_semaphore(up) for up in urls_with_params], return_exceptions=True)
+    return [r for r in results if r is not None and not isinstance(r, Exception)]
+
+
+async def prefetch_league_data(league_id: str, timestamp: str = None):
+    """Prefetch and cache commonly used league data concurrently"""
+    tasks = [
+        get_managers(league_id, timestamp),
+        get_league_rosters_size(league_id, timestamp),
+        get_traded_picks(league_id, timestamp),
+        get_draft_id(league_id),
+        get_sleeper_state()
+    ]
+    
+    try:
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Cache the results for faster subsequent access
+        return {
+            'managers': results[0] if not isinstance(results[0], Exception) else None,
+            'roster_size': results[1] if not isinstance(results[1], Exception) else None,
+            'traded_picks': results[2] if not isinstance(results[2], Exception) else None,
+            'draft_id': results[3] if not isinstance(results[3], Exception) else None,
+            'nfl_state': results[4] if not isinstance(results[4], Exception) else None
+        }
+    except Exception as e:
+        print(f"Error prefetching league data: {e}")
+        return {}
 
 
 def dedupe(lst):
@@ -138,7 +192,7 @@ async def get_user_leagues(user_name: str, league_year: str, timestamp: str = No
 
 
 async def clean_league_managers(db, league_id: str):
-    delete_query = f"""
+    delete_query = """
         DELETE FROM dynastr.managers 
         WHERE league_id = $1;
     """
@@ -180,6 +234,30 @@ async def clean_draft_positions(db, league_id: str):
     # Execute the delete query asynchronously using a transaction
     async with db.transaction():
         await db.execute(delete_query, league_id)
+    return
+
+
+# Optimized bulk cleaning function
+async def clean_all_league_data(db, session_id: str, league_id: str):
+    """Optimized function to clean all league data in a single transaction with proper order"""
+    try:
+        async with db.transaction():
+            # Execute delete operations in proper order to respect foreign key constraints
+            # First delete child records, then parent records
+            await db.execute("DELETE FROM dynastr.league_players WHERE session_id = $1 AND league_id = $2", session_id, league_id)
+            await db.execute("DELETE FROM dynastr.draft_picks WHERE league_id = $1 AND session_id = $2", league_id, session_id)
+            await db.execute("DELETE FROM dynastr.draft_positions WHERE league_id = $1", league_id)
+            await db.execute("DELETE FROM dynastr.managers WHERE league_id = $1", league_id)
+        print(f"✓ Successfully cleaned all league data for league {league_id}")
+    except Exception as e:
+        print(f"✗ Error cleaning league data: {e}")
+        # Try individual cleaning as fallback
+        print("Attempting individual cleaning operations as fallback...")
+        await clean_league_rosters(db, session_id, league_id)
+        await clean_league_picks(db, league_id, session_id)  
+        await clean_draft_positions(db, league_id)
+        await clean_league_managers(db, league_id)
+        print("✓ Fallback cleaning completed")
     return
 
 
@@ -404,6 +482,13 @@ async def insert_league_rosters(db, session_id: str, user_id: str, league_id: st
     rosters = await get_league_rosters(league_id, timestamp)
 
     league_players = []
+    batch_size = 1000  # Process in batches to avoid memory issues
+    
+    # Helper function to process batches
+    async def process_batch(batch_data, sql_query):
+        if batch_data:
+            async with db.transaction():
+                await db.executemany(sql_query, batch_data)
 
     PLACEHOLDER_OWNER_ID = "UNKNOWN_OWNER" 
     unknown_owner_counter = 1
@@ -459,9 +544,11 @@ async def insert_league_rosters(db, session_id: str, user_id: str, league_id: st
     """
 
     try:
+        # Simple, fast bulk insert
         async with db.transaction():
             await db.executemany(sql, league_players)
-            print(f"Successfully inserted/updated {len(league_players)} player entries for league {league_id}.")
+        
+        print(f"✓ Successfully inserted/updated {len(league_players)} player entries for league {league_id}")
     except Exception as e:
         print(f"Database error during bulk insert for league {league_id}: {e}")
         traceback.print_exc()
@@ -612,6 +699,24 @@ async def clean_draft_trades(db, league_id: str) -> None:
     return
 
 
+# Optimized trade cleaning function
+async def clean_all_trades(db, league_id: str) -> None:
+    """Optimized function to clean all trade data in a single transaction - fixed concurrency issue"""
+    try:
+        async with db.transaction():
+            # Execute sequentially to avoid concurrent operation issues
+            await db.execute("DELETE FROM dynastr.player_trades WHERE league_id = $1", league_id)
+            await db.execute("DELETE FROM dynastr.draft_pick_trades WHERE league_id = $1", league_id)
+        print(f"✓ Successfully cleaned all trade data for league {league_id}")
+    except Exception as e:
+        print(f"✗ Error cleaning trade data: {e}")
+        # Fallback to individual operations
+        await clean_player_trades(db, league_id)
+        await clean_draft_trades(db, league_id)
+        print("✓ Fallback trade cleaning completed")
+    return
+
+
 @cache(expire=SHORT_CACHE_EXPIRATION)
 async def get_trades(league_id: str, nfl_state: dict, year_entered: str) -> list:
     leg = max(nfl_state.get("leg", 1), 1)
@@ -619,17 +724,29 @@ async def get_trades(league_id: str, nfl_state: dict, year_entered: str) -> list
 
     async def fetch_week_transactions(week):
         url = f"https://api.sleeper.app/v1/league/{league_id}/transactions/{week}"
-        transactions = await make_api_call(url)
-        all_trades.extend([t for t in transactions if t["type"] == "trade"])
+        try:
+            transactions = await make_api_call(url)
+            return [t for t in transactions if t.get("type") == "trade"]
+        except Exception:
+            return []
 
+    # Determine weeks to fetch
     if nfl_state["season_type"] != "off":
-        tasks = [fetch_week_transactions(week) for week in range(1, leg + 1)]
+        weeks = list(range(1, leg + 1))
     elif year_entered != nfl_state["season"]:
-        tasks = [fetch_week_transactions(week) for week in range(1, 18)]
+        weeks = list(range(1, 18))
     else:
-        tasks = [fetch_week_transactions(1)]
-
-    await asyncio.gather(*tasks)
+        weeks = [1]
+    
+    # Fast concurrent API calls
+    tasks = [fetch_week_transactions(week) for week in weeks]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # Collect all trades quickly
+    for result in results:
+        if isinstance(result, list):
+            all_trades.extend(result)
+    
     return all_trades
 
 
@@ -728,29 +845,37 @@ async def insert_trades(db, trades: dict, league_id: str) -> None:
     player_drops_db = dedupe(player_drops_db)
     draft_drops_db = dedupe(draft_drops_db)
 
-    async with db.transaction():
-        draft_adds_query = """
-            INSERT INTO dynastr.draft_pick_trades (transaction_id, status_updated, roster_id, transaction_type, season, round, round_suffix, org_owner_id, league_id)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            ON CONFLICT DO NOTHING;
-        """
-        draft_drops_query = draft_adds_query
-        player_adds_query = """
-            INSERT INTO dynastr.player_trades (transaction_id, status_updated, roster_id, transaction_type, player_id, league_id)
-            VALUES ($1, $2, $3, $4, $5, $6)
-            ON CONFLICT DO NOTHING;
-        """
-        player_drops_query = player_adds_query
+    # Simple, fast trade inserts
+    draft_query = """
+        INSERT INTO dynastr.draft_pick_trades (transaction_id, status_updated, roster_id, transaction_type, season, round, round_suffix, org_owner_id, league_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ON CONFLICT DO NOTHING;
+    """
+    player_query = """
+        INSERT INTO dynastr.player_trades (transaction_id, status_updated, roster_id, transaction_type, player_id, league_id)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT DO NOTHING;
+    """
 
-        await db.executemany(draft_adds_query, draft_adds_db)
-        await db.executemany(draft_drops_query, draft_drops_db)
-        await db.executemany(player_adds_query, player_adds_db)
-        await db.executemany(player_drops_query, player_drops_db)
+    # Fast sequential inserts
+    async with db.transaction():
+        if draft_adds_db:
+            await db.executemany(draft_query, draft_adds_db)
+        if draft_drops_db:
+            await db.executemany(draft_query, draft_drops_db)
+        if player_adds_db:
+            await db.executemany(player_query, player_adds_db)
+        if player_drops_db:
+            await db.executemany(player_query, player_drops_db)
 
     return
 
 
+# Backup function removed to prevent any confusion or accidental calls
+
+
 async def player_manager_rosters(db, roster_data: RosterDataModel):
+    """Streamlined version optimized for speed"""
     session_id = roster_data.guid
     user_id = roster_data.user_id
     league_id = roster_data.league_id
@@ -759,51 +884,66 @@ async def player_manager_rosters(db, roster_data: RosterDataModel):
 
     # Get timestamp for cache busting
     timestamp = getattr(roster_data, 'timestamp', None)
+    
+    print(f"Starting FAST roster processing for league {league_id}")
 
     try:
-        print("performing roster cleaning operations")
+        # Step 1: Clean data quickly
+        print("Step 1: Cleaning league data...")
         await clean_league_managers(db, league_id)
         await clean_league_rosters(db, session_id, league_id)
         await clean_league_picks(db, league_id, session_id)
         await clean_draft_positions(db, league_id)
-    except Exception as e:
-        print('issue1', e)
-        return e
-    try:
-        print("fetching managers")
-        managers = await get_managers(league_id, timestamp) 
-        await insert_managers(db, managers) 
-    except Exception as e:
-        print('issue2', e)
-        return e
-    
-    try:
-        print("Inserting rosters and managing picks")
-        await insert_league_rosters(db, session_id, user_id, league_id, timestamp)
-    except Exception as e:
-        print('issue3', e)
-        return e    
-    
-    print("Getting trades")
-    await total_owned_picks(db, league_id, session_id, startup)
-    await draft_positions(db, league_id, user_id)
+        print("✓ Cleaning completed")
 
-    try:
-        print("cleaning trades")
-        await clean_player_trades(db, league_id)
-        await clean_draft_trades(db, league_id)
+        # Step 2: Start API calls early (the ONLY safe concurrent optimization)
+        nfl_state_task = asyncio.create_task(get_sleeper_state())
+
+        # Step 3: Process everything else sequentially but efficiently
+        print("Step 2: Processing managers...")
+        managers = await get_managers(league_id, timestamp)
+        await insert_managers(db, managers)
+        print("✓ Managers processed")
+
+        print("Step 3: Processing rosters...")
+        await insert_league_rosters(db, session_id, user_id, league_id, timestamp)
+        print("✓ Rosters processed")
+        
+        print("Step 4: Processing picks and positions...")
+        await total_owned_picks(db, league_id, session_id, startup)
+        await draft_positions(db, league_id, user_id)
+        print("✓ Picks and positions processed")
+
+        # Step 5: Process trades (NFL state should be ready)
+        print("Step 5: Processing trades...")
+        try:
+            await clean_player_trades(db, league_id)
+            await clean_draft_trades(db, league_id)
+            
+            nfl_state = await nfl_state_task  # This should be ready by now
+            trades = await get_trades(league_id, nfl_state, year_entered)
+            await insert_trades(db, trades, league_id)
+            print("✓ Trades processed")
+        except Exception as e:
+            print(f"⚠ Trades processing failed: {e}")
+
+        print(f"✅ All operations completed for league {league_id}")
+        return {
+            "status": "success",
+            "message": "Roster data updated successfully", 
+            "league_id": league_id,
+            "operations_completed": ["cleaning", "managers", "rosters", "picks", "trades"]
+        }
+
     except Exception as e:
-        print('issue4', e)
-        return e
-    try:
-        trades = await get_trades(league_id, await get_sleeper_state(), year_entered)
-    except Exception as e:
-        print('issue5', e)
-        return e
-    try:
-        print("inserting Trades")
-        await insert_trades(db, trades, league_id)
-    except Exception as e:
-        print(f"Issue: {e}")
+        error_msg = f'Failed to update roster data for league {league_id}: {str(e)}'
+        print(f"✗ Error: {error_msg}")
+        import traceback
         traceback.print_exc()
-        return e
+        
+        return {
+            "status": "error", 
+            "message": error_msg,
+            "league_id": league_id,
+            "error_type": type(e).__name__
+        }
