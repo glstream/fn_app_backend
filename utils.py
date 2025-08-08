@@ -1,13 +1,8 @@
-import requests
-from requests.exceptions import RequestException
-from time import sleep
-from psycopg2.extras import execute_batch, execute_values
-from superflex_models import UserDataModel, LeagueDataModel, RosterDataModel, RanksDataModel
-from datetime import datetime
+from superflex_models import UserDataModel, RosterDataModel, RanksDataModel
+from datetime import datetime, timezone
 import asyncio
 import aiohttp
 import traceback
-from fastapi_cache import FastAPICache
 from fastapi_cache.decorator import cache
 from typing import Optional
 
@@ -405,7 +400,7 @@ async def insert_managers(db, managers: list):
 
 
 async def insert_league_rosters(db, session_id: str, user_id: str, league_id: str, timestamp: str = None) -> None:
-    entry_time = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f%z")
+    entry_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f%z")
     rosters = await get_league_rosters(league_id, timestamp)
 
     league_players = []
@@ -690,7 +685,7 @@ async def insert_trades(db, trades: dict, league_id: str) -> None:
                 )
 
             for pick in draft_picks:
-                draft_picks_ = [v for k, v in pick.items()]
+                draft_picks_ = [v for _, v in pick.items()]
 
                 if draft_picks_:
                     try:
