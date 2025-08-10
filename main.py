@@ -127,17 +127,19 @@ async def leagues(league_year: str, user_name: str, guid: str, platform: str = "
     try:
         # Get the user_id based on platform
         if platform == 'fleaflicker':
-            # For Fleaflicker, we need to handle it differently
-            # Fall back to league_ids approach since FetchUserLeagues requires numeric user_id
-            if not league_ids:
-                return []  # No leagues without IDs for Fleaflicker
-            
-            # Parse league IDs if provided as comma-separated string
-            league_id_list = league_ids.split(',') if league_ids else []
-            
-            # Fetch Fleaflicker league data directly using league IDs
-            from fleaflicker_utils import get_fleaflicker_user_leagues_by_ids
-            leagues_data = await get_fleaflicker_user_leagues_by_ids(user_name, league_year, league_id_list, timestamp)
+            # For Fleaflicker, check if user_name is email or numeric ID
+            if '@' in user_name:
+                # Email-based lookup
+                from fleaflicker_utils import get_fleaflicker_user_leagues_by_email
+                user_id, leagues_data = await get_fleaflicker_user_leagues_by_email(user_name, league_year, timestamp=timestamp)
+                if not user_id:
+                    raise HTTPException(status_code=404, detail="No user found with that email address")
+                # Update user_name to be the user_id for consistency
+                user_name = user_id
+            else:
+                # Numeric ID lookup (existing behavior)
+                from fleaflicker_utils import get_fleaflicker_user_leagues
+                leagues_data = await get_fleaflicker_user_leagues(user_name, league_year, timestamp=timestamp)
             
             # Format the response similar to Sleeper
             result = []
@@ -149,7 +151,7 @@ async def leagues(league_year: str, user_name: str, guid: str, platform: str = "
                     'user_id': user_name,  # Use username as ID for Fleaflicker
                     'league_id': league[1],  # league ID
                     'league_name': league[0],  # league name
-                    'avatar': league[2],
+                    'avatar': league[2] if league[2] else 'default',  # Default avatar for empty ones
                     'total_rosters': league[3],
                     'qb_cnt': league[4],
                     'roster_type': 'Superflex' if league[9] > 0 else 'Single QB',
@@ -158,7 +160,7 @@ async def leagues(league_year: str, user_name: str, guid: str, platform: str = "
                     'sport': league[12],
                     'insert_date': datetime.now().isoformat(),
                     'rf_cnt': league[13],
-                    'league_type': league[14],
+                    'league_type': 'Dynasty',  # Default to Dynasty for Fleaflicker leagues
                     'league_year': league[15],
                     'platform': 'fleaflicker'
                 })

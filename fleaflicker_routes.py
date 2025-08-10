@@ -12,7 +12,6 @@ from db import get_db
 from superflex_models import UserDataModel, LeagueDataModel, RosterDataModel
 from fleaflicker_utils import (
     get_fleaflicker_user_id,
-    get_fleaflicker_user_leagues_by_ids,
     get_fleaflicker_managers,
     insert_fleaflicker_teams,
     insert_fleaflicker_scoreboards,
@@ -41,16 +40,18 @@ async def insert_current_leagues_fleaflicker(db, user_data: UserDataModel):
     # Get timestamp for cache busting if provided
     timestamp = getattr(user_data, 'timestamp', None)
     
-    # Get league IDs from request
-    league_ids = getattr(user_data, 'league_ids', [])
-    if not league_ids:
-        return {"status": "error", "message": "No league IDs provided for Fleaflicker"}
-    
-    # Get Fleaflicker user ID (just the username)
-    user_id = await get_fleaflicker_user_id(user_name)
-    
-    # Get user's Fleaflicker leagues with provided IDs
-    leagues = await get_fleaflicker_user_leagues_by_ids(user_name, league_year, league_ids, timestamp)
+    # Check if user_name is email or numeric ID
+    if '@' in user_name:
+        # Email-based lookup
+        from fleaflicker_utils import get_fleaflicker_user_leagues_by_email
+        user_id, leagues = await get_fleaflicker_user_leagues_by_email(user_name, league_year, timestamp=timestamp)
+        if not user_id:
+            raise HTTPException(status_code=404, detail="No user found with that email address")
+    else:
+        # Numeric ID lookup (existing behavior)
+        user_id = await get_fleaflicker_user_id(user_name)
+        from fleaflicker_utils import get_fleaflicker_user_leagues
+        leagues = await get_fleaflicker_user_leagues(user_name, league_year, timestamp=timestamp)
     
     entry_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f%z")
     

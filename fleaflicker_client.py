@@ -87,17 +87,24 @@ class FleaflickerClient:
         Returns:
             List of league dictionaries
         """
-        params = {"user_id": user_id}
+        params = {}
+        if user_id:
+            params["user_id"] = user_id
         if season:
             params["season"] = season
         if email:
             params["email"] = email
             
+        print(f"DEBUG: Fleaflicker API call params: {params}")
+            
         try:
             response = await self._make_api_call("FetchUserLeagues", params)
+            print(f"DEBUG: Fleaflicker API raw response: {response}")
             return response.get("leagues", [])
         except Exception as e:
             print(f"Error fetching user leagues for user {user_id}: {e}")
+            import traceback
+            traceback.print_exc()
             return []
     
     # @cache(expire=CACHE_EXPIRATION)  # Disabled temporarily

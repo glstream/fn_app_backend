@@ -126,12 +126,119 @@ async def get_fleaflicker_user_leagues_by_ids(username: str, season: str, league
 
 
 # @cache(expire=LEAGUE_CACHE_EXPIRATION)  # Disabled temporarily 
+async def get_fleaflicker_user_leagues_by_email(email: str, season: str, timestamp: str = None) -> Tuple[str, List[Dict]]:
+    """
+    Get leagues for a Fleaflicker user using their email address.
+    
+    Args:
+        email: User's email address
+        season: Season year  
+        timestamp: Optional timestamp for cache busting
+        
+    Returns:
+        Tuple of (user_id, list of league dictionaries)
+    """
+    try:
+        print(f"DEBUG: Attempting Fleaflicker email lookup for: {email}")
+        # Use FetchUserLeagues with email - this should return user info and leagues
+        user_leagues_data = await fleaflicker_client.get_user_leagues(None, season, email)
+        
+        print(f"DEBUG: Fleaflicker API response for email {email}: {user_leagues_data}")
+        
+        if not user_leagues_data:
+            print(f"DEBUG: No leagues returned for email {email}")
+            return None, []
+        
+        # Extract user_id from the response if available
+        # For email-based lookup, we can get the user_id from the ownedTeam information
+        user_id = None  # Will be populated from response
+        
+        normalized_leagues = []
+        
+        for league in user_leagues_data:
+            try:
+                league_id = str(league.get("id"))
+                
+                # Extract user_id from ownedTeam - the team owner is the user we're looking for
+                owned_team = league.get("ownedTeam", {})
+                if owned_team and not user_id:
+                    # The user_id should be extractable from the owned team data
+                    # Since we don't see an explicit user_id, we can use the team owner pattern
+                    # For now, we'll use a fallback approach
+                    user_id = email  # Use email as user_id identifier
+                
+                # Get league rules for roster composition
+                rules = await fleaflicker_client.fetch_league_rules(league_id)
+                
+                # Parse roster positions from rules
+                roster_positions = rules.get("rosterPositions", [])
+                
+                # Count position slots
+                qbs = sum(1 for p in roster_positions if p.get("position") == "QB")
+                rbs = sum(1 for p in roster_positions if p.get("position") == "RB")
+                wrs = sum(1 for p in roster_positions if p.get("position") == "WR")
+                tes = sum(1 for p in roster_positions if p.get("position") == "TE")
+                flexes = sum(1 for p in roster_positions if "FLEX" in p.get("position", "") and "SUPER" not in p.get("position", ""))
+                super_flexes = sum(1 for p in roster_positions if "SUPER_FLEX" in p.get("position", ""))
+                rec_flexes = sum(1 for p in roster_positions if "REC_FLEX" in p.get("position", ""))
+                
+                starters = sum([qbs, rbs, wrs, tes, flexes, super_flexes, rec_flexes])
+                total_roster = len(roster_positions)
+                
+                # Determine league category (1=standard, 2=superflex)
+                league_cat = 2 if super_flexes > 0 else 1
+                
+                league_name = league.get("name", f"League {league_id}")
+                total_teams = league.get("size", 0)
+                
+                normalized_leagues.append((
+                    league_name,
+                    league_id,
+                    "",  # No league avatar URL in Fleaflicker
+                    total_teams,
+                    qbs,
+                    rbs,
+                    wrs,
+                    tes,
+                    flexes,
+                    super_flexes,
+                    starters,
+                    total_roster,
+                    "nfl",
+                    rec_flexes,
+                    league_cat,  # Integer: 1=standard, 2=superflex
+                    season,
+                    None,  # No previous season ID
+                ))
+                
+                # Try to extract user_id from league data if not found yet
+                if not user_id:
+                    # Check if user_id is in the league response somehow
+                    # This might need adjustment based on actual API response
+                    user_id = league.get("user_id") or email  # Fallback to email
+                
+            except Exception as e:
+                print(f"Error processing league {league.get('id', 'unknown')}: {e}")
+                continue
+        
+        # If we couldn't extract user_id from leagues, use email as fallback
+        if not user_id:
+            user_id = email
+            
+        return user_id, normalized_leagues
+        
+    except Exception as e:
+        print(f"Error fetching user leagues by email {email}: {e}")
+        return None, []
+
+
+# @cache(expire=LEAGUE_CACHE_EXPIRATION)  # Disabled temporarily 
 async def get_fleaflicker_user_leagues(user_id: str, season: str, email: str = None, timestamp: str = None) -> List[Dict]:
     """
     Get leagues for a Fleaflicker user using the FetchUserLeagues API endpoint.
     
     Args:
-        user_id: Fleaflicker user ID
+        user_id: Fleaflicker user ID (must be numeric)
         season: Season year  
         email: User's email address (optional)
         timestamp: Optional timestamp for cache busting
@@ -140,15 +247,15 @@ async def get_fleaflicker_user_leagues(user_id: str, season: str, email: str = N
         List of league dictionaries with normalized structure
     """
     try:
-        # Try to convert user_id to integer if it's numeric
-        # Fleaflicker likely expects numeric user IDs, not usernames
+        # Validate that user_id is numeric
         try:
             numeric_user_id = int(user_id)
-            user_leagues_data = await fleaflicker_client.get_user_leagues(str(numeric_user_id), season)
         except ValueError:
-            # If not numeric, treat as username and return empty for now
             print(f"Fleaflicker user_id must be numeric, got: {user_id}")
-            return []
+            raise ValueError(f"Invalid Fleaflicker user_id: {user_id}. Must be a numeric value.")
+        
+        # Use the actual FetchUserLeagues endpoint
+        user_leagues_data = await fleaflicker_client.get_user_leagues(str(numeric_user_id), season, email)
         
         if not user_leagues_data:
             return []
@@ -211,7 +318,7 @@ async def get_fleaflicker_user_leagues(user_id: str, season: str, email: str = N
         
     except Exception as e:
         print(f"Error fetching user leagues for user {user_id}: {e}")
-        return []
+        raise
 
 
 async def clean_fleaflicker_league_data(db, session_id: str, league_id: str):
