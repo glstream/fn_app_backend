@@ -19,6 +19,13 @@ from db import init_db_pool, close_db, get_db
 from superflex_models import UserDataModel, LeagueDataModel, RosterDataModel, RanksDataModel
 from utils import (get_user_id, insert_current_leagues, player_manager_rosters, insert_ranks_summary,
                    close_http_session)  # Import close_http_session
+from fleaflicker_utils import (
+    get_fleaflicker_user_id, get_fleaflicker_user_leagues,
+    player_manager_rosters_fleaflicker, insert_fleaflicker_teams,
+    insert_fleaflicker_scoreboards, insert_fleaflicker_transactions
+)
+from fleaflicker_client import fleaflicker_client
+from fleaflicker_routes import router as fleaflicker_router, insert_current_leagues_fleaflicker
 
 # Load environment variables from .env file
 load_dotenv()
@@ -28,6 +35,9 @@ origins = [
 ]
 
 app = FastAPI()
+
+# Add Fleaflicker router
+app.include_router(fleaflicker_router)
 
 # Add GZipMiddleware first, it should be one of the first middlewares
 app.add_middleware(GZipMiddleware, minimum_size=1000)  # Compress responses larger than 1KB
@@ -64,13 +74,39 @@ async def shutdown_event():
 # POST ROUTES
 @app.post("/user_details")
 async def user_details(user_data: UserDataModel, db=Depends(get_db)):
-    return await insert_current_leagues(db, user_data)
+    # Check if platform is specified, default to sleeper
+    platform = getattr(user_data, 'platform', 'sleeper')
+    
+    if platform == 'fleaflicker':
+        # Handle Fleaflicker league insertion
+        return await insert_current_leagues_fleaflicker(db, user_data)
+    else:
+        # Default Sleeper behavior
+        return await insert_current_leagues(db, user_data)
 
 
 @app.post("/roster")
 async def roster(roster_data: RosterDataModel, db=Depends(get_db)):
     print('attempt rosters')
-    return await player_manager_rosters(db, roster_data)
+    # Check platform from roster data or database
+    platform = getattr(roster_data, 'platform', None)
+    print(f"DEBUG: platform from roster_data: {platform}")
+    
+    if not platform:
+        # Query the platform from current_leagues table
+        query = """SELECT platform FROM dynastr.current_leagues 
+                   WHERE session_id = $1 AND league_id = $2 LIMIT 1"""
+        result = await db.fetchrow(query, roster_data.guid, roster_data.league_id)
+        platform = result['platform'] if result else 'sleeper'
+        print(f"DEBUG: platform from database: {platform}")
+    
+    print(f"DEBUG: Using platform: {platform}")
+    if platform == 'fleaflicker':
+        print("DEBUG: Calling Fleaflicker roster function")
+        return await player_manager_rosters_fleaflicker(db, roster_data)
+    else:
+        print("DEBUG: Calling Sleeper roster function")
+        return await player_manager_rosters(db, roster_data)
 
 
 @app.post("/ranks_summary")
@@ -83,28 +119,78 @@ async def ranks_summary(ranks_data: RanksDataModel, db=Depends(get_db)):
 # GET ROUTES with caching
 @app.get("/leagues")
 @cache(expire=LEAGUE_CACHE_EXPIRATION)
-async def leagues(league_year: str, user_name: str, guid: str, db=Depends(get_db), _cb: Optional[str] = None, timestamp: Optional[str] = None):
+async def leagues(league_year: str, user_name: str, guid: str, platform: str = "sleeper", league_ids: Optional[str] = None, db=Depends(get_db), _cb: Optional[str] = None, timestamp: Optional[str] = None):
     # _cb and timestamp parameters can be used for cache busting from frontend
-    # Get the user_id (ensure get_user_id is also an async function)
-    user_id = await get_user_id(user_name)
-    session_id = guid
+    # Clean username - remove any whitespace/encoding issues
+    user_name = user_name.strip() if user_name else ""
+    
+    try:
+        # Get the user_id based on platform
+        if platform == 'fleaflicker':
+            # For Fleaflicker, we need to handle it differently
+            # Fall back to league_ids approach since FetchUserLeagues requires numeric user_id
+            if not league_ids:
+                return []  # No leagues without IDs for Fleaflicker
+            
+            # Parse league IDs if provided as comma-separated string
+            league_id_list = league_ids.split(',') if league_ids else []
+            
+            # Fetch Fleaflicker league data directly using league IDs
+            from fleaflicker_utils import get_fleaflicker_user_leagues_by_ids
+            leagues_data = await get_fleaflicker_user_leagues_by_ids(user_name, league_year, league_id_list, timestamp)
+            
+            # Format the response similar to Sleeper
+            result = []
+            for idx, league in enumerate(leagues_data):
+                result.append({
+                    'key': idx + 1,
+                    'session_id': guid,
+                    'user_name': user_name,
+                    'user_id': user_name,  # Use username as ID for Fleaflicker
+                    'league_id': league[1],  # league ID
+                    'league_name': league[0],  # league name
+                    'avatar': league[2],
+                    'total_rosters': league[3],
+                    'qb_cnt': league[4],
+                    'roster_type': 'Superflex' if league[9] > 0 else 'Single QB',
+                    'starter_cnt': league[10],
+                    'total_roster_cnt': league[11],
+                    'sport': league[12],
+                    'insert_date': datetime.now().isoformat(),
+                    'rf_cnt': league[13],
+                    'league_type': league[14],
+                    'league_year': league[15],
+                    'platform': 'fleaflicker'
+                })
+            return result
+        else:
+            # Sleeper platform handling
+            user_id = await get_user_id(user_name)
+            session_id = guid
 
-    # Assemble the SQL file path
-    sql_path = Path.cwd() / "sql" / "leagues" / "get_leagues.sql"
-    if not sql_path.exists():
-        raise HTTPException(status_code=404, detail="SQL file not found")
+            # Assemble the SQL file path
+            sql_path = Path.cwd() / "sql" / "leagues" / "get_leagues.sql"
+            if not sql_path.exists():
+                raise HTTPException(status_code=404, detail="SQL file not found")
 
-    # Read the SQL query and personalize it
-    async with aiofiles.open(sql_path, mode='r') as get_leagues_file:
-        get_leagues_sql = await get_leagues_file.read()
-        get_leagues_sql = (get_leagues_sql
-                        .replace("'session_id'", f"'{session_id}'")
-                        .replace("'user_id'", f"'{user_id}'")
-                        .replace("'league_year'", f"'{league_year}'"))
+            # Read the SQL query and personalize it
+            async with aiofiles.open(sql_path, mode='r') as get_leagues_file:
+                get_leagues_sql = await get_leagues_file.read()
+                get_leagues_sql = (get_leagues_sql
+                                .replace("'session_id'", f"'{session_id}'")
+                                .replace("'user_id'", f"'{user_id}'")
+                                .replace("'league_year'", f"'{league_year}'")
+                                .replace("'platform'", f"'{platform}'"))
 
-    # Execute the query asynchronously and fetch results
-    results = await db.fetch(get_leagues_sql)
-    return results
+            # Execute the query asynchronously and fetch results
+            results = await db.fetch(get_leagues_sql)
+            return results
+            
+    except Exception as e:
+        print(f"Error in leagues endpoint: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to fetch leagues: {str(e)}")
 
 
 @app.get("/get_user")
@@ -198,6 +284,18 @@ async def league_summary(league_id: str, platform: str, rank_type: str, guid: st
             else "superflex_one_qb_value"
         )
 
+    elif platform == 'fleaflicker':
+        league_pos_col = (
+            "superflex_sf_pos_rank"
+            if roster_type.lower() == "superflex"
+            else "superflex_one_qb_pos_rank"
+        )
+        league_type = (
+            "superflex_sf_value"
+            if roster_type.lower() == "superflex"
+            else "superflex_one_qb_value"
+        )
+
     elif platform == 'fc':
         league_pos_col = (
             "sf_position_rank" if league_type == "sf_value" else "one_qb_position_rank"
@@ -235,6 +333,9 @@ async def league_detail(league_id: str, platform: str, rank_type: str, guid: str
     if platform == 'sf':
         league_pos_col = "superflex_sf_pos_rank" if roster_type.lower() == "superflex" else "superflex_one_qb_pos_rank"
         league_type = "superflex_sf_value" if roster_type.lower() == "superflex" else "superflex_one_qb_value"
+    elif platform == 'fleaflicker':
+        league_pos_col = "superflex_sf_pos_rank" if roster_type.lower() == "superflex" else "superflex_one_qb_pos_rank"
+        league_type = "superflex_sf_value" if roster_type.lower() == "superflex" else "superflex_one_qb_value"
     elif platform == 'dd':
         league_pos_col = "sf_position_rank" if roster_type.lower() == "superflex" else "position_rank"
         league_type = "sf_trade_value" if roster_type.lower() == "superflex" else "trade_value"
@@ -270,6 +371,8 @@ async def trades_detail(league_id: str, platform: str, roster_type: str, league_
 
     if platform == 'sf':
         league_type = "superflex_sf_value" if roster_type == "sf_value" else "superflex_one_qb_value"
+    elif platform == 'fleaflicker':
+        league_type = "superflex_sf_value" if roster_type.lower() == "superflex" else "superflex_one_qb_value"
     elif platform == 'dd':
         league_type = "sf_trade_value" if roster_type == "sf_value" else "trade_value"
 
@@ -311,6 +414,8 @@ async def trades_summary(league_id: str, platform: str, roster_type: str, league
 
     if platform == 'sf':
         league_type = "superflex_sf_value" if roster_type == "sf_value" else "superflex_one_qb_value"
+    elif platform == 'fleaflicker':
+        league_type = "superflex_sf_value" if roster_type.lower() == "superflex" else "superflex_one_qb_value"
     elif platform == 'dd':
         league_type = "sf_trade_value" if roster_type == "sf_value" else "trade_value"
 
@@ -386,6 +491,8 @@ async def best_available(league_id: str, platform: str, rank_type: str, guid: st
 
     if platform == 'sf':
         league_type = "superflex_sf_value" if roster_type == "sf_value" else "superflex_one_qb_value"
+    elif platform == 'fleaflicker':
+        league_type = "superflex_sf_value" if roster_type.lower() == "superflex" else "superflex_one_qb_value"
     elif platform == 'dd':
         league_type = "sf_trade_value" if roster_type == "sf_value" else "trade_value"
     else:
