@@ -652,6 +652,113 @@ async def get_fleaflicker_league_rosters(league_id: str, season: str = None, tim
     print(f"DEBUG: Processed {len(processed_rosters)} rosters from {team_count} teams")
     return processed_rosters
 
+async def insert_fleaflicker_ranks_summary(db, session_id: str, league_id: str, rank_source: str = 'ktc'):
+    """
+    Calculate and insert power rankings for a Fleaflicker league.
+    
+    Args:
+        db: Database connection
+        session_id: Session ID
+        league_id: League ID  
+        rank_source: Ranking source (ktc, fc, sf, dp, dd)
+    """
+    try:
+        # Get league summary data to calculate rankings
+        # Need to join with fleaflicker_teams to get proper user mapping
+        summary_query = f"""
+            WITH team_values AS (
+                SELECT 
+                    ft.owner_id as user_id,
+                    ft.owner_display_name as display_name,
+                    COALESCE(SUM(CASE 
+                        WHEN p.player_position IN ('QB', 'RB', 'WR', 'TE') 
+                        THEN sfr.superflex_sf_value 
+                        ELSE 0 
+                    END), 0) as total_value,
+                    COALESCE(SUM(CASE 
+                        WHEN p.player_position IN ('QB', 'RB', 'WR', 'TE')
+                        THEN sfr.superflex_sf_value 
+                        ELSE 0 
+                    END), 0) as starters_value,
+                    COALESCE(SUM(CASE 
+                        WHEN dp.owner_id IS NOT NULL 
+                        THEN sfr2.superflex_sf_value 
+                        ELSE 0 
+                    END), 0) as picks_value
+                FROM dynastr.fleaflicker_teams ft
+                LEFT JOIN dynastr.league_players lp ON ft.owner_id = lp.user_id 
+                    AND lp.league_id = $1 AND lp.session_id = $2
+                LEFT JOIN dynastr.players p ON lp.player_id = p.player_id
+                LEFT JOIN dynastr.sf_player_ranks sfr ON p.full_name = sfr.player_full_name 
+                    AND sfr.rank_type = 'dynasty'
+                LEFT JOIN dynastr.draft_picks dp ON ft.team_id = dp.owner_id 
+                    AND dp.league_id = $1 AND dp.session_id = $2
+                LEFT JOIN dynastr.sf_player_ranks sfr2 ON (dp.year || ' ' || dp.round_name) = sfr2.player_full_name
+                    AND sfr2.rank_type = 'dynasty'
+                WHERE ft.league_id = $1 AND ft.session_id = $2
+                GROUP BY ft.owner_id, ft.owner_display_name
+            )
+            SELECT 
+                user_id,
+                display_name,
+                total_value,
+                RANK() OVER (ORDER BY total_value DESC) as power_rank,
+                starters_value,
+                RANK() OVER (ORDER BY starters_value DESC) as starters_rank,
+                0 as bench_value,
+                1 as bench_rank,
+                picks_value,
+                RANK() OVER (ORDER BY picks_value DESC) as picks_rank
+            FROM team_values
+            ORDER BY power_rank
+        """
+        
+        rankings = await db.fetch(summary_query, league_id, session_id)
+        
+        if not rankings:
+            print(f"No rankings data found for league {league_id}")
+            return {"status": "error", "message": "No rankings data found"}
+        
+        # Insert rankings into ranks_summary table
+        entry_time = datetime.utcnow()
+        
+        for rank in rankings:
+            insert_sql = f"""
+                INSERT INTO dynastr.ranks_summary (
+                    user_id, display_name, league_id, 
+                    {rank_source}_power_rank, {rank_source}_starters_rank,
+                    {rank_source}_bench_rank, {rank_source}_picks_rank, 
+                    updatetime
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                ON CONFLICT (user_id, league_id) 
+                DO UPDATE SET 
+                    updatetime = CURRENT_TIMESTAMP,
+                    {rank_source}_power_rank = EXCLUDED.{rank_source}_power_rank,
+                    {rank_source}_starters_rank = EXCLUDED.{rank_source}_starters_rank,
+                    {rank_source}_bench_rank = EXCLUDED.{rank_source}_bench_rank,
+                    {rank_source}_picks_rank = EXCLUDED.{rank_source}_picks_rank
+            """
+            
+            await db.execute(
+                insert_sql,
+                rank['user_id'],
+                rank['display_name'],
+                league_id,
+                rank['power_rank'],
+                rank['starters_rank'],
+                rank['bench_rank'],
+                rank['picks_rank'],
+                entry_time
+            )
+        
+        print(f"Successfully inserted {len(rankings)} rankings for league {league_id} using {rank_source}")
+        return {"status": "success", "rankings_inserted": len(rankings)}
+        
+    except Exception as e:
+        print(f"Error inserting Fleaflicker ranks summary: {e}")
+        raise
+
 
 async def insert_fleaflicker_league_rosters(db, session_id: str, user_id: str, league_id: str, season: str = None, timestamp: str = None):
     """

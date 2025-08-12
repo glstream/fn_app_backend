@@ -55,21 +55,61 @@ async def insert_current_leagues_fleaflicker(db, user_data: UserDataModel):
     
     entry_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f%z")
     
-    # Clean existing Fleaflicker leagues for this user/session
+    # For each league, get the actual Fleaflicker numeric user ID from team standings
+    # This ensures consistency with the ranks_summary table
+    enriched_leagues = []
+    for league in leagues:
+        try:
+            league_id = league[1]  # league_id is at index 1
+            
+            # Get standings to find the actual Fleaflicker user ID
+            standings = await fleaflicker_client.fetch_league_standings(league_id)
+            fleaflicker_user_id = None
+            
+            # Search through divisions and teams to find the user
+            for division in standings.get("divisions", []):
+                for team in division.get("teams", []):
+                    for owner in team.get("owners", []):
+                        # Match by email or display name
+                        if (owner.get("displayName") == user_name or 
+                            (owner.get("email") and owner.get("email").lower() == user_name.lower())):
+                            fleaflicker_user_id = str(owner.get("id"))
+                            break
+                    if fleaflicker_user_id:
+                        break
+                if fleaflicker_user_id:
+                    break
+            
+            # If we found the Fleaflicker user ID, use it; otherwise fallback to original user_id
+            actual_user_id = fleaflicker_user_id if fleaflicker_user_id else user_id
+            
+            # Create enriched league tuple with the correct user ID
+            enriched_league = list(league)  # Convert to list for modification
+            enriched_leagues.append((actual_user_id, enriched_league))
+            
+        except Exception as e:
+            print(f"Warning: Could not get Fleaflicker user ID for league {league[1]}: {e}")
+            # Fallback to original user_id
+            enriched_leagues.append((user_id, list(league)))
+    
+    # Clean existing Fleaflicker leagues for this session
+    # Use a broader delete since we might have different user_ids now
     delete_query = """
         DELETE FROM dynastr.current_leagues 
-        WHERE user_id = $1 AND session_id = $2 AND platform = 'fleaflicker'
+        WHERE session_id = $1 AND platform = 'fleaflicker'
+        AND league_id = ANY($2::text[])
     """
+    league_ids = [league[1][1] for league in enriched_leagues]  # Get league IDs
     
     try:
         async with db.transaction():
-            await db.execute(delete_query, user_id, session_id)
+            await db.execute(delete_query, session_id, league_ids)
             
-            # Prepare league data for insertion
+            # Prepare league data for insertion with correct user IDs
             values = [
                 (
                     session_id,
-                    user_id,
+                    actual_user_id,  # Use the Fleaflicker numeric user ID
                     user_name,
                     league[1],  # league_id
                     league[0],  # league_name
@@ -92,7 +132,7 @@ async def insert_current_leagues_fleaflicker(db, user_data: UserDataModel):
                     "active",   # league_status
                     "fleaflicker"  # platform
                 )
-                for league in leagues
+                for actual_user_id, league in enriched_leagues
             ]
             
             # Insert with platform column
@@ -129,10 +169,70 @@ async def insert_current_leagues_fleaflicker(db, user_data: UserDataModel):
                     platform = excluded.platform
             """, values)
             
+            # Save the username to user_searches table for future reference
+            # Use the first found Fleaflicker user ID if available
+            search_user_id = enriched_leagues[0][0] if enriched_leagues else user_id
+            await db.execute("""
+                INSERT INTO dynastr.user_searches (
+                    user_identifier, 
+                    platform, 
+                    display_name,
+                    user_id,
+                    league_year,
+                    last_used
+                )
+                VALUES ($1, $2, $3, $4, $5, NOW())
+                ON CONFLICT (user_identifier, platform) 
+                DO UPDATE SET 
+                    last_used = NOW(),
+                    league_year = EXCLUDED.league_year,
+                    user_id = EXCLUDED.user_id
+            """, user_name, 'fleaflicker', user_name, search_user_id, league_year)
+            
         return {"status": "success", "leagues_inserted": len(values)}
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to insert Fleaflicker leagues: {e}")
+
+
+@router.get("/saved-usernames")
+async def get_saved_usernames(db=Depends(get_db)):
+    """
+    Get saved Fleaflicker usernames from previous searches.
+    
+    Returns:
+        List of previously searched usernames with metadata
+    """
+    try:
+        query = """
+            SELECT 
+                user_identifier,
+                display_name,
+                user_id,
+                league_year,
+                last_used
+            FROM dynastr.user_searches
+            WHERE platform = 'fleaflicker'
+            ORDER BY last_used DESC
+            LIMIT 20
+        """
+        
+        results = await db.fetch(query)
+        
+        usernames = []
+        for row in results:
+            usernames.append({
+                "user_identifier": row["user_identifier"],
+                "display_name": row["display_name"],
+                "user_id": row["user_id"],
+                "league_year": row["league_year"],
+                "last_used": row["last_used"].isoformat() if row["last_used"] else None
+            })
+        
+        return {"status": "success", "usernames": usernames}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch saved usernames: {e}")
 
 
 @router.get("/league/{league_id}/standings")

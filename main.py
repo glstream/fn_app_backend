@@ -22,7 +22,8 @@ from utils import (get_user_id, insert_current_leagues, player_manager_rosters, 
 from fleaflicker_utils import (
     get_fleaflicker_user_id, get_fleaflicker_user_leagues,
     player_manager_rosters_fleaflicker, insert_fleaflicker_teams,
-    insert_fleaflicker_scoreboards, insert_fleaflicker_transactions
+    insert_fleaflicker_scoreboards, insert_fleaflicker_transactions,
+    insert_fleaflicker_ranks_summary
 )
 from fleaflicker_client import fleaflicker_client
 from fleaflicker_routes import router as fleaflicker_router, insert_current_leagues_fleaflicker
@@ -72,6 +73,65 @@ async def shutdown_event():
 
 
 # POST ROUTES
+@app.get("/saved_usernames")
+async def get_all_saved_usernames(platform: Optional[str] = None, db=Depends(get_db)):
+    """
+    Get saved usernames from previous searches across all platforms or for a specific platform.
+    
+    Args:
+        platform: Optional platform filter (fleaflicker, sleeper, etc.)
+        
+    Returns:
+        List of previously searched usernames with metadata
+    """
+    try:
+        if platform:
+            query = """
+                SELECT 
+                    user_identifier,
+                    platform,
+                    display_name,
+                    user_id,
+                    league_year,
+                    last_used
+                FROM dynastr.user_searches
+                WHERE platform = $1
+                ORDER BY last_used DESC
+                LIMIT 20
+            """
+            results = await db.fetch(query, platform)
+        else:
+            query = """
+                SELECT 
+                    user_identifier,
+                    platform,
+                    display_name,
+                    user_id,
+                    league_year,
+                    last_used
+                FROM dynastr.user_searches
+                ORDER BY last_used DESC
+                LIMIT 50
+            """
+            results = await db.fetch(query)
+        
+        usernames = []
+        for row in results:
+            usernames.append({
+                "user_identifier": row["user_identifier"],
+                "platform": row["platform"],
+                "display_name": row["display_name"] or row["user_identifier"],
+                "user_id": row["user_id"],
+                "league_year": row["league_year"],
+                "last_used": row["last_used"].isoformat() if row["last_used"] else None
+            })
+        
+        return {"status": "success", "usernames": usernames}
+        
+    except Exception as e:
+        return {"status": "error", "message": str(e), "usernames": []}
+
+
 @app.post("/user_details")
 async def user_details(user_data: UserDataModel, db=Depends(get_db)):
     # Check if platform is specified, default to sleeper
@@ -103,7 +163,18 @@ async def roster(roster_data: RosterDataModel, db=Depends(get_db)):
     print(f"DEBUG: Using platform: {platform}")
     if platform == 'fleaflicker':
         print("DEBUG: Calling Fleaflicker roster function")
-        return await player_manager_rosters_fleaflicker(db, roster_data)
+        result = await player_manager_rosters_fleaflicker(db, roster_data)
+        
+        # After loading rosters, calculate and save rankings
+        try:
+            print("DEBUG: Calculating Fleaflicker rankings...")
+            ranks_result = await insert_fleaflicker_ranks_summary(db, roster_data.guid, roster_data.league_id)
+            print(f"DEBUG: Rankings result: {ranks_result}")
+        except Exception as e:
+            print(f"WARNING: Failed to calculate Fleaflicker rankings: {e}")
+            # Don't fail the roster load if rankings fail
+        
+        return result
     else:
         print("DEBUG: Calling Sleeper roster function")
         return await player_manager_rosters(db, roster_data)
@@ -116,6 +187,33 @@ async def ranks_summary(ranks_data: RanksDataModel, db=Depends(get_db)):
     return await insert_ranks_summary(db, ranks_data)
 
 
+@app.post("/fleaflicker_ranks_summary")
+async def fleaflicker_ranks_summary(data: dict, db=Depends(get_db)):
+    """
+    Calculate and insert Fleaflicker power rankings.
+    
+    Expected data format:
+    {
+        "session_id": "session-guid",
+        "league_id": "league-id",
+        "rank_source": "ktc" (optional, defaults to ktc)
+    }
+    """
+    try:
+        session_id = data.get("session_id")
+        league_id = data.get("league_id") 
+        rank_source = data.get("rank_source", "ktc")
+        
+        if not session_id or not league_id:
+            return {"status": "error", "message": "session_id and league_id are required"}
+            
+        result = await insert_fleaflicker_ranks_summary(db, session_id, league_id, rank_source)
+        return result
+        
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
 # GET ROUTES with caching
 @app.get("/leagues")
 @cache(expire=LEAGUE_CACHE_EXPIRATION)
@@ -125,68 +223,48 @@ async def leagues(league_year: str, user_name: str, guid: str, platform: str = "
     user_name = user_name.strip() if user_name else ""
     
     try:
-        # Get the user_id based on platform
+        # Get the user_id and use SQL query for both platforms
         if platform == 'fleaflicker':
-            # For Fleaflicker, check if user_name is email or numeric ID
-            if '@' in user_name:
-                # Email-based lookup
-                from fleaflicker_utils import get_fleaflicker_user_leagues_by_email
-                user_id, leagues_data = await get_fleaflicker_user_leagues_by_email(user_name, league_year, timestamp=timestamp)
-                if not user_id:
-                    raise HTTPException(status_code=404, detail="No user found with that email address")
-                # Update user_name to be the user_id for consistency
-                user_name = user_id
-            else:
-                # Numeric ID lookup (existing behavior)
-                from fleaflicker_utils import get_fleaflicker_user_leagues
-                leagues_data = await get_fleaflicker_user_leagues(user_name, league_year, timestamp=timestamp)
+            # For Fleaflicker, we need to find the numeric user ID that corresponds to the input
+            # Check current_leagues to find the mapping from user input to numeric user ID
+            lookup_query = """
+                SELECT DISTINCT user_id
+                FROM dynastr.current_leagues 
+                WHERE platform = 'fleaflicker' 
+                AND (user_name = $1 OR user_id = $1)
+                AND league_year = $2
+                LIMIT 1
+            """
+            lookup_result = await db.fetchrow(lookup_query, user_name, league_year)
             
-            # Format the response similar to Sleeper
-            result = []
-            for idx, league in enumerate(leagues_data):
-                result.append({
-                    'key': idx + 1,
-                    'session_id': guid,
-                    'user_name': user_name,
-                    'user_id': user_name,  # Use username as ID for Fleaflicker
-                    'league_id': league[1],  # league ID
-                    'league_name': league[0],  # league name
-                    'avatar': league[2] if league[2] else 'default',  # Default avatar for empty ones
-                    'total_rosters': league[3],
-                    'qb_cnt': league[4],
-                    'roster_type': 'Superflex' if league[9] > 0 else 'Single QB',
-                    'starter_cnt': league[10],
-                    'total_roster_cnt': league[11],
-                    'sport': league[12],
-                    'insert_date': datetime.now().isoformat(),
-                    'rf_cnt': league[13],
-                    'league_type': 'Dynasty',  # Default to Dynasty for Fleaflicker leagues
-                    'league_year': league[15],
-                    'platform': 'fleaflicker'
-                })
-            return result
+            if lookup_result:
+                user_id = lookup_result['user_id']
+            else:
+                # If not found in current_leagues, this user hasn't loaded leagues yet
+                raise HTTPException(status_code=404, detail="User not found. Please load your leagues first using the user details endpoint.")
         else:
             # Sleeper platform handling
             user_id = await get_user_id(user_name)
-            session_id = guid
 
-            # Assemble the SQL file path
-            sql_path = Path.cwd() / "sql" / "leagues" / "get_leagues.sql"
-            if not sql_path.exists():
-                raise HTTPException(status_code=404, detail="SQL file not found")
+        session_id = guid
 
-            # Read the SQL query and personalize it
-            async with aiofiles.open(sql_path, mode='r') as get_leagues_file:
-                get_leagues_sql = await get_leagues_file.read()
-                get_leagues_sql = (get_leagues_sql
-                                .replace("'session_id'", f"'{session_id}'")
-                                .replace("'user_id'", f"'{user_id}'")
-                                .replace("'league_year'", f"'{league_year}'")
-                                .replace("'platform'", f"'{platform}'"))
+        # Use the same SQL query for both platforms
+        sql_path = Path.cwd() / "sql" / "leagues" / "get_leagues.sql"
+        if not sql_path.exists():
+            raise HTTPException(status_code=404, detail="SQL file not found")
 
-            # Execute the query asynchronously and fetch results
-            results = await db.fetch(get_leagues_sql)
-            return results
+        # Read the SQL query and personalize it
+        async with aiofiles.open(sql_path, mode='r') as get_leagues_file:
+            get_leagues_sql = await get_leagues_file.read()
+            get_leagues_sql = (get_leagues_sql
+                            .replace("'session_id'", f"'{session_id}'")
+                            .replace("'user_id'", f"'{user_id}'")
+                            .replace("'league_year'", f"'{league_year}'")
+                            .replace("'platform'", f"'{platform}'"))
+
+        # Execute the query asynchronously and fetch results
+        results = await db.fetch(get_leagues_sql)
+        return results
             
     except Exception as e:
         print(f"Error in leagues endpoint: {e}")
