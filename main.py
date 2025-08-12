@@ -254,6 +254,19 @@ async def trade_calculator(platform: str, rank_type: str, db=Depends(get_db)):
 async def league_summary(league_id: str, platform: str, rank_type: str, guid: str, roster_type: str, db=Depends(get_db), timestamp: Optional[str] = None):
     # timestamp parameter for cache busting
     session_id = guid
+    
+    # Look up the actual platform from the database instead of trusting frontend
+    query = """
+        SELECT platform 
+        FROM dynastr.current_leagues 
+        WHERE session_id = $1 AND league_id = $2 
+        LIMIT 1
+    """
+    result = await db.fetchrow(query, session_id, league_id)
+    actual_platform = result['platform'] if result else platform
+    print(f"DEBUG: Frontend sent platform={platform}, database has platform={actual_platform}")
+    platform = actual_platform
+    
     league_type = 'sf_value' if roster_type == 'Superflex' else 'one_qb_value'
     rank_type = 'dynasty' if rank_type.lower() == 'dynasty' else 'redraft'
 
@@ -329,6 +342,19 @@ async def league_summary(league_id: str, platform: str, rank_type: str, guid: st
 async def league_detail(league_id: str, platform: str, rank_type: str, guid: str, roster_type: str, db=Depends(get_db), timestamp: Optional[str] = None):
     # timestamp parameter for cache busting
     session_id = guid
+    
+    # Look up the actual platform from the database instead of trusting frontend
+    query = """
+        SELECT platform 
+        FROM dynastr.current_leagues 
+        WHERE session_id = $1 AND league_id = $2 
+        LIMIT 1
+    """
+    result = await db.fetchrow(query, session_id, league_id)
+    actual_platform = result['platform'] if result else platform
+    print(f"DEBUG: Frontend sent platform={platform}, database has platform={actual_platform}")
+    platform = actual_platform
+    
     league_type = 'sf_value' if roster_type.lower() == 'superflex' else 'one_qb_value'
     rank_type = 'dynasty' if rank_type.lower() == 'dynasty' else 'redraft'
 

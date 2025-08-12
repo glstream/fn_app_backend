@@ -332,6 +332,10 @@ async def clean_fleaflicker_league_data(db, session_id: str, league_id: str):
     """
     queries = [
         """
+        DELETE FROM dynastr.league_players 
+        WHERE session_id = $1 AND league_id = $2;
+        """,
+        """
         DELETE FROM dynastr.fleaflicker_player_scores 
         WHERE session_id = $1 AND league_id = $2;
         """,
@@ -356,6 +360,33 @@ async def clean_fleaflicker_league_data(db, session_id: str, league_id: str):
     async with db.transaction():
         for query in queries:
             await db.execute(query, session_id, league_id)
+
+
+async def clean_fleaflicker_draft_data(db, session_id: str, league_id: str):
+    """
+    Clean existing draft picks and positions for Fleaflicker league.
+    
+    Args:
+        db: Database connection
+        session_id: Session ID
+        league_id: League ID
+    """
+    queries = [
+        """
+        DELETE FROM dynastr.draft_picks 
+        WHERE league_id = $1 AND session_id = $2;
+        """,
+        """
+        DELETE FROM dynastr.draft_positions 
+        WHERE league_id = $1;
+        """
+    ]
+    
+    async with db.transaction():
+        # Clean draft picks using both league_id and session_id
+        await db.execute(queries[0], league_id, session_id)
+        # Clean draft positions using just league_id
+        await db.execute(queries[1], league_id)
 
 
 # @cache(expire=LEAGUE_CACHE_EXPIRATION)  # Disabled temporarily
@@ -1007,8 +1038,9 @@ async def player_manager_rosters_fleaflicker(db, roster_data):
     timestamp = getattr(roster_data, 'timestamp', None)
     
     try:
-        # Clean existing data
+        # Clean existing data including draft picks
         await clean_fleaflicker_league_data(db, session_id, league_id)
+        await clean_fleaflicker_draft_data(db, session_id, league_id)
         
         # Insert managers
         managers = await get_fleaflicker_managers(league_id, timestamp)
@@ -1038,7 +1070,486 @@ async def player_manager_rosters_fleaflicker(db, roster_data):
         # Insert transactions
         await insert_fleaflicker_transactions(db, session_id, league_id)
         
+        # Insert draft picks for future years (simplified approach)
+        print("DEBUG: Getting ALL future draft picks once...")
+        
+        # Get ALL draft picks data once (FetchTeamPicks returns all future picks)
+        all_draft_picks = await extract_all_fleaflicker_draft_picks(league_id)
+        
+        if all_draft_picks:
+            print(f"DEBUG: Found {len(all_draft_picks)} total draft picks across all years")
+            
+            # Insert ALL draft picks at once (no year loop to avoid duplication)
+            await insert_fleaflicker_draft_picks_data(db, session_id, league_id, all_draft_picks)
+            print("DEBUG: Inserted all draft picks successfully")
+        else:
+            print("DEBUG: No draft picks found")
+        
         return {"status": "success", "message": "Fleaflicker rosters updated"}
         
     except Exception as e:
         raise Exception(f"Failed to update Fleaflicker rosters: {e}")
+
+
+async def extract_all_fleaflicker_draft_picks(league_id: str) -> List[Dict]:
+    """
+    Extract future draft picks from Fleaflicker using FetchTeamPicks API.
+    
+    The API returns future draft picks with ownedBy.id as the current owner
+    and slot.round/season for the pick details.
+    
+    Args:
+        league_id: Fleaflicker league ID
+        
+    Returns:
+        List of all draft pick dictionaries for future years
+    """
+    try:
+        draft_picks = []
+        current_year = datetime.now().year
+        
+        # Get team standings to find all teams in league
+        standings = await fleaflicker_client.fetch_league_standings(league_id)
+        
+        if not standings or "divisions" not in standings:
+            print(f"DEBUG: No standings data found for league {league_id}")
+            return []
+        
+        # Extract all team IDs from standings
+        team_ids = []
+        for division in standings.get("divisions", []):
+            for team in division.get("teams", []):
+                if team.get("id"):
+                    team_ids.append(str(team.get("id")))
+        
+        print(f"DEBUG: Found {len(team_ids)} teams in league {league_id}")
+        print(f"DEBUG: Fetching future draft picks from Fleaflicker API")
+        
+        # Track unique picks to avoid duplicates
+        seen_picks = set()
+        
+        # Fetch future draft picks for each team using FetchTeamPicks API
+        for team_id in team_ids:
+            try:
+                team_picks = await fleaflicker_client.fetch_team_picks(league_id, team_id)
+                print(f"DEBUG: Raw API response for team {team_id}: picks count = {len(team_picks.get('picks', []))}")
+                
+                if team_picks and "picks" in team_picks:
+                    picks = team_picks.get("picks", [])
+                    
+                    # Debug: Show raw picks for specific team
+                    if team_id == "1798697":
+                        print(f"DEBUG: Team 1798697 raw picks sample: {picks[:5]}")
+                    
+                    for pick in picks:
+                        # Extract pick details using the correct API structure
+                        season = pick.get("season")
+                        slot = pick.get("slot", {})
+                        round_num = slot.get("round")
+                        slot_position = slot.get("position", slot.get("pick", None))  # Try to get pick position within round
+                        owned_by = pick.get("ownedBy", {})
+                        owner_id = owned_by.get("id")
+                        original = pick.get("original", {})
+                        # If no original field, assume the team we're querying is the original owner
+                        # unless the pick is owned by someone else (then it was traded)
+                        original_id = original.get("id") if original else team_id
+                        
+                        # Debug: print full slot structure for 2026 2nd round picks
+                        if season == 2026 and round_num == 2:
+                            print(f"DEBUG: 2026 2nd pick - Full slot data: {slot}")
+                            print(f"DEBUG: Position in slot: {slot_position}")
+                        
+                        # Only include picks that are:
+                        # 1. Future years (2026+)
+                        # 2. First 4 rounds only
+                        # 3. Not already processed (avoid duplicates)
+                        if (season and round_num and owner_id and
+                            season >= current_year + 1 and  # Future years only
+                            round_num <= 4):  # First 4 rounds only
+                            
+                            # Create unique key using original team ID to handle traded picks
+                            # This ensures each original pick is only added once
+                            pick_key = f"{team_id}_{season}_{round_num}_{original_id}"
+                            
+                            if pick_key not in seen_picks:
+                                seen_picks.add(pick_key)
+                                
+                                # Use positional round names that match sf_player_ranks table
+                                if slot_position:
+                                    # Use actual slot position from API
+                                    round_name = _get_positional_round_name(round_num, slot_position, 12)
+                                else:
+                                    # Fallback: Estimate position based on original team ID
+                                    # Lower team IDs typically draft earlier (worse teams)
+                                    try:
+                                        team_id_num = int(original_id)
+                                        # Simple heuristic: divide teams into thirds based on team ID
+                                        if team_id_num % 3 == 1:
+                                            estimated_position = 3  # Early
+                                        elif team_id_num % 3 == 2:
+                                            estimated_position = 7  # Mid
+                                        else:
+                                            estimated_position = 11  # Late
+                                        round_name = _get_positional_round_name(round_num, estimated_position, 12)
+                                    except:
+                                        # Ultimate fallback to simple name
+                                        round_name = _get_round_suffix(round_num)
+                                
+                                # Debug logging for important picks
+                                if season == 2026 and round_num == 2:
+                                    print(f"DEBUG: Added pick - Owner: {owner_id}, Year: {season}, Round: {round_num}")
+                                    print(f"       Round name: '{round_name}'")
+                                    print(f"       Original team: {original_id}, Current owner: {owner_id}")
+                                    if original_id != owner_id:
+                                        print(f"       TRADED PICK - {season} {round_name} from team {original_id} to team {owner_id}")
+                                
+                                pick_data = {
+                                    'year': str(season),
+                                    'round': str(round_num),
+                                    'round_name': round_name,
+                                    'roster_id': str(original_id),  # Original team that had the pick
+                                    'owner_id': str(owner_id),      # Current owner (after trades)
+                                    'league_id': league_id
+                                }
+                                draft_picks.append(pick_data)
+                                
+                                # Log traded picks specially
+                                if str(owner_id) != str(original_id):
+                                    print(f"DEBUG: TRADED PICK - {season} {round_name} from team {original_id} to team {owner_id}")
+                                else:
+                                    print(f"DEBUG: Added pick - Owner: {owner_id}, Year: {season}, Round: {round_num}")
+                
+            except Exception as e:
+                print(f"DEBUG: Error fetching picks for team {team_id}: {e}")
+                continue
+        
+        print(f"DEBUG: Extracted {len(draft_picks)} future draft picks from Fleaflicker API")
+        return draft_picks
+        
+    except Exception as e:
+        print(f"ERROR: Failed to create draft picks: {e}")
+        return []
+
+
+async def extract_fleaflicker_draft_picks(league_id: str, season: str = "2025") -> List[Dict]:
+    """
+    Extract draft picks from Fleaflicker using FetchTeamPicks API for each team
+    
+    Args:
+        league_id: Fleaflicker league ID
+        season: Draft season (default: 2025)
+        
+    Returns:
+        List of draft pick dictionaries with structure:
+        [
+            {
+                'year': '2025',
+                'round': '1', 
+                'round_name': '1st',
+                'roster_id': '12345',
+                'owner_id': '67890',
+                'league_id': '443658'
+            }
+        ]
+    """
+    try:
+        draft_picks = []
+        
+        # Get team standings to find all teams in league
+        standings = await fleaflicker_client.fetch_league_standings(league_id)
+        
+        if not standings or "divisions" not in standings:
+            print(f"DEBUG: No standings data found for league {league_id}")
+            return []
+        
+        # Extract all team IDs from standings
+        team_ids = []
+        for division in standings.get("divisions", []):
+            for team in division.get("teams", []):
+                if team.get("id"):
+                    team_ids.append(str(team.get("id")))
+        
+        print(f"DEBUG: Found {len(team_ids)} teams in league {league_id}")
+        print(f"DEBUG: Season={season}, League={league_id}")
+        
+        # Fetch future draft picks for each team using FetchTeamPicks API
+        for team_id in team_ids:
+            try:
+                print(f"DEBUG: Fetching picks for team {team_id}")
+                team_picks = await fleaflicker_client.fetch_team_picks(league_id, team_id)
+                print(f"DEBUG: Raw API response for team {team_id}: {team_picks}")  # Full API response
+                
+                if team_picks and "picks" in team_picks:
+                    picks = team_picks["picks"]
+                    
+                    for pick in picks:
+                        # Extract pick details
+                        pick_season = str(pick.get("season", season))
+                        pick_round = pick.get("round", 1)  # This might be wrong!
+                        round_name = _get_round_suffix(pick_round)
+                        
+                        # DEBUG: Print what Fleaflicker API actually returns
+                        print(f"DEBUG PICK: team={team_id}, season={pick_season}, round={pick_round}, raw_pick={pick}")
+                        
+                        # Only include picks for the exact requested season
+                        if pick_season == season:
+                            draft_pick = {
+                                'year': pick_season,
+                                'round': str(pick_round),
+                                'round_name': round_name,
+                                'roster_id': team_id,
+                                'owner_id': team_id,  # Current owner (may have been traded)
+                                'league_id': league_id
+                            }
+                            draft_picks.append(draft_pick)
+                            print(f"ADDED PICK: {draft_pick}")
+                            
+                    print(f"DEBUG: Found {len(picks)} API picks for team {team_id}, added {len([p for p in draft_picks if p['owner_id'] == team_id])} to results")
+                else:
+                    print(f"DEBUG: No picks data returned for team {team_id}")
+                    
+            except Exception as e:
+                print(f"DEBUG: Error fetching picks for team {team_id}: {e}")
+                continue
+        
+        print(f"DEBUG: Extracted {len(draft_picks)} total draft picks for season {season}+")
+        return draft_picks
+        
+    except Exception as e:
+        print(f"ERROR: Failed to extract draft picks: {e}")
+        return []
+
+
+async def insert_fleaflicker_draft_picks_data(db, session_id: str, league_id: str, draft_picks_data: List[Dict]):
+    """
+    Insert draft picks data into database
+    
+    Args:
+        db: Database connection
+        session_id: Session identifier 
+        league_id: League ID
+        draft_picks_data: List of draft pick dictionaries
+    """
+    if not draft_picks_data:
+        print(f"DEBUG: No draft picks data to insert")
+        return
+        
+    print(f"DEBUG: About to insert {len(draft_picks_data)} draft picks into database")
+    print(f"DEBUG: Sample picks: {draft_picks_data[:5]}")  # Show first 5 picks
+        
+    picks_for_db = []
+    for pick in draft_picks_data:
+        picks_for_db.append([
+            pick['year'],
+            pick['round'], 
+            pick['round_name'],
+            pick['roster_id'],
+            pick['owner_id'],
+            league_id,
+            None,  # draft_id (not available from Fleaflicker)
+            session_id
+        ])
+    
+    # Insert into database
+    sql = """
+        INSERT INTO dynastr.draft_picks (year, round, round_name, roster_id, owner_id, league_id, draft_id, session_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        ON CONFLICT (year, round, roster_id, owner_id, league_id, session_id)
+        DO UPDATE SET round_name = EXCLUDED.round_name, draft_id = EXCLUDED.draft_id;
+    """
+    
+    async with db.transaction():
+        await db.executemany(sql, picks_for_db)
+        
+    print(f"DEBUG: Inserted {len(picks_for_db)} draft picks for league {league_id}")
+
+
+def _get_round_suffix(round_num: int) -> str:
+    """Get ordinal suffix for round number (1st, 2nd, 3rd, etc.)"""
+    if round_num in [11, 12, 13]:
+        return f"{round_num}th"
+    elif round_num % 10 == 1:
+        return f"{round_num}st" 
+    elif round_num % 10 == 2:
+        return f"{round_num}nd"
+    elif round_num % 10 == 3:
+        return f"{round_num}rd"
+    else:
+        return f"{round_num}th"
+
+
+def _get_positional_round_name(round_num: int, slot: int, league_size: int = 12) -> str:
+    """
+    Get round name with positional qualifier based on draft slot within the round
+    
+    Args:
+        round_num: Round number (1, 2, 3, etc.)
+        slot: Pick position within the round (1-12 for 12-team league)
+        league_size: Number of teams in league
+        
+    Returns:
+        String like "Early 1st", "Mid 2nd", "Late 3rd", etc.
+    """
+    # Get basic ordinal suffix
+    if round_num in [11, 12, 13]:
+        ordinal = f"{round_num}th"
+    elif round_num % 10 == 1:
+        ordinal = f"{round_num}st" 
+    elif round_num % 10 == 2:
+        ordinal = f"{round_num}nd"
+    elif round_num % 10 == 3:
+        ordinal = f"{round_num}rd"
+    else:
+        ordinal = f"{round_num}th"
+    
+    # Determine positional qualifier based on slot within round
+    # For 12-team league: 1-4 = Early, 5-8 = Mid, 9-12 = Late
+    third = league_size // 3
+    if slot <= third:
+        return f"Early {ordinal}"
+    elif slot <= 2 * third:
+        return f"Mid {ordinal}"
+    else:
+        return f"Late {ordinal}"
+
+
+async def insert_fleaflicker_draft_picks(db, session_id: str, league_id: str, year: str = "2025"):
+    """
+    Insert Fleaflicker draft picks into the database
+    
+    Args:
+        db: Database connection
+        session_id: Session identifier
+        league_id: Fleaflicker league ID 
+        year: Draft year (default: 2025)
+    """
+    try:
+        # Note: Draft picks cleanup is now done upfront in clean_fleaflicker_draft_data()
+        
+        # Extract draft picks from Fleaflicker
+        draft_picks_data = await extract_fleaflicker_draft_picks(league_id, year)
+        
+        if not draft_picks_data:
+            print(f"DEBUG: No draft picks found for league {league_id}")
+            return
+        
+        # Prepare data for database insertion
+        picks_for_db = []
+        for pick in draft_picks_data:
+            picks_for_db.append([
+                pick['year'],
+                pick['round'], 
+                pick['round_name'],
+                pick['roster_id'],
+                pick['owner_id'],
+                league_id,
+                None,  # draft_id (not available from Fleaflicker)
+                session_id
+            ])
+        
+        # Insert into database
+        sql = """
+            INSERT INTO dynastr.draft_picks (year, round, round_name, roster_id, owner_id, league_id, draft_id, session_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            ON CONFLICT (year, round, roster_id, owner_id, league_id, session_id)
+            DO UPDATE SET round_name = EXCLUDED.round_name, draft_id = EXCLUDED.draft_id;
+        """
+        
+        async with db.transaction():
+            await db.executemany(sql, picks_for_db)
+            
+        print(f"DEBUG: Inserted {len(picks_for_db)} draft picks for league {league_id}")
+        
+    except Exception as e:
+        print(f"ERROR: Failed to insert draft picks: {e}")
+        raise
+
+
+async def insert_fleaflicker_draft_positions(db, league_id: str, year: str = "2025", draft_picks_data: List[Dict] = None):
+    """
+    Insert Fleaflicker draft positions based on actual draft picks owned by teams
+    
+    Args:
+        db: Database connection
+        league_id: Fleaflicker league ID 
+        year: Draft year (default: 2025)
+        draft_picks_data: Optional pre-fetched draft picks data
+    """
+    try:
+        # Note: Draft positions cleanup is now done upfront in clean_fleaflicker_draft_data()
+        
+        # Get team standings to map team IDs to user IDs
+        standings = await fleaflicker_client.fetch_league_standings(league_id)
+        
+        if not standings or "divisions" not in standings:
+            print(f"DEBUG: No standings data found for league {league_id}")
+            return
+        
+        # Create team mapping for user IDs
+        team_to_user = {}
+        for division in standings.get("divisions", []):
+            for team in division.get("teams", []):
+                if team.get("id"):
+                    team_id = str(team.get("id"))
+                    user_id = str(team.get("owners", [{}])[0].get("id", "") if team.get("owners") else "")
+                    team_to_user[team_id] = user_id
+        
+        # Get actual draft picks for this year and create positions based on them
+        if draft_picks_data is None:
+            draft_picks_data = await extract_fleaflicker_draft_picks(league_id, year)
+        
+        # Create draft positions based on actual picks owned
+        draft_positions = []
+        
+        # Group picks by round to assign positions within each round
+        picks_by_round = {}
+        for pick in draft_picks_data:
+            if pick['year'] == year:
+                round_num = int(pick['round'])
+                if round_num not in picks_by_round:
+                    picks_by_round[round_num] = []
+                picks_by_round[round_num].append(pick)
+        
+        # Create positions for each round
+        for round_num in sorted(picks_by_round.keys()):
+            picks_in_round = picks_by_round[round_num]
+            
+            for i, pick in enumerate(picks_in_round, 1):
+                position_name = "Early" if i <= 4 else "Mid" if i <= 8 else "Late"
+                user_id = team_to_user.get(pick['roster_id'], "")
+                
+                draft_positions.append([
+                    year,                    # season
+                    str(round_num),          # rounds - USE ACTUAL ROUND NUMBER!
+                    str(i),                  # position (within this round)
+                    position_name,           # position_name
+                    pick['roster_id'],       # roster_id
+                    user_id,                 # user_id  
+                    league_id,               # league_id
+                    None,                    # draft_id (not available from Fleaflicker)
+                    'N'                      # draft_set_flg (N = not set yet)
+                ])
+        
+        # Only insert if we have positions to insert
+        if draft_positions:
+            # Insert into database
+            sql = """
+                INSERT INTO dynastr.draft_positions (season, rounds, position, position_name, roster_id, user_id, league_id, draft_id, draft_set_flg)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                ON CONFLICT (season, rounds, position, user_id, league_id)
+                DO UPDATE SET position_name = EXCLUDED.position_name,
+                              roster_id = EXCLUDED.roster_id,
+                              draft_id = EXCLUDED.draft_id,
+                              draft_set_flg = EXCLUDED.draft_set_flg;
+            """
+            
+            async with db.transaction():
+                await db.executemany(sql, draft_positions)
+                
+            print(f"DEBUG: Inserted {len(draft_positions)} draft positions for league {league_id} (year {year})")
+        else:
+            print(f"DEBUG: No draft positions to insert for league {league_id} (year {year})")
+        
+    except Exception as e:
+        print(f"ERROR: Failed to insert draft positions: {e}")
+        raise

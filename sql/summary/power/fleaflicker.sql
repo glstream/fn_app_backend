@@ -158,43 +158,26 @@ SELECT
                     and cl.platform = 'fleaflicker'
                     )
 
-                    , base_picks as (select t1.user_id
-                                , t1.season
-                                , t1.year
-                                , t1.player_full_name
-                                , sf.ktc_player_id
-                                FROM (
-                                    SELECT  
-                                    al.user_id
-                                    , al.season
-                                    , al.year 
-                                    , CASE WHEN (dname.position::integer) < 13 and al.draft_set_flg = 'Y' and al.year = dname.season
-                                                THEN al.year || ' Round ' || al.round || ' Pick ' || dname.position
-                                            WHEN (dname.position::integer) > 12 and al.draft_set_flg = 'Y' and al.year = dname.season
-                                                THEN al.year || ' ' || dname.position_name || ' ' || al.round_name 
-                                            ELSE al.year|| ' Mid ' || al.round_name 
-                                            END AS player_full_name 
-                                    FROM (                           
-                                        SELECT dp.roster_id
-                                        , dp.year
-                                        , dp.round_name
-                                        , dp.round
-                                        , dp.league_id
-                                        , dpos.user_id
-                                        , dpos.season
-                                        , dpos.draft_set_flg
-                                        FROM dynastr.draft_picks dp
-                                        inner join dynastr.draft_positions dpos on dp.owner_id = dpos.roster_id and dp.league_id = dpos.league_id
-
-                                        where dpos.league_id = 'league_id'
-                                        and dp.session_id = 'session_id'
-                                        ) al 
-                                    inner join dynastr.draft_positions dname on  dname.roster_id = al.roster_id and al.league_id = dname.league_id
-                                ) t1
-                                LEFT join dynastr.sf_player_ranks sf on t1.player_full_name = sf.player_full_name
-                                where 1=1
-                                and sf.rank_type = 'rank_type'
-                                    )              
+                    , base_picks as (
+                        SELECT DISTINCT 
+                            ft.owner_id as user_id
+                            , dp.year as season
+                            , dp.year 
+                            , dp.year || ' ' || dp.round_name AS player_full_name 
+                            , sf.ktc_player_id
+                            , dp.roster_id  -- Include original roster to distinguish traded picks
+                        FROM dynastr.draft_picks dp
+                        INNER JOIN dynastr.fleaflicker_teams ft 
+                            ON dp.owner_id = ft.team_id 
+                            AND dp.league_id = ft.league_id
+                            AND dp.session_id = ft.session_id
+                        LEFT JOIN dynastr.sf_player_ranks sf 
+                            ON (dp.year || ' ' || dp.round_name) = sf.player_full_name
+                            AND sf.rank_type = 'rank_type'
+                        WHERE dp.league_id = 'league_id'
+                            AND dp.session_id = 'session_id'
+                            AND CAST(dp.round AS INTEGER) <= 4  -- Only show first 4 rounds to keep it simple
+                    )              
                     , starters as (SELECT  
                     qb.user_id
                     , qb.player_id
@@ -335,7 +318,10 @@ SELECT
                     ,tp.player_position
                     ,tp.fantasy_position
                     ,tp.fantasy_designation
-                    ,coalesce(sf.league_type, -1) as player_value
+                    ,CASE 
+                        WHEN tp.player_position = 'PICKS' AND coalesce(sf.league_type, -1) > 25000 THEN 10000
+                        ELSE coalesce(sf.league_type, -1) 
+                    END as player_value
                     from (select 
                             user_id
                             ,ap.player_id
@@ -343,7 +329,7 @@ SELECT
                             ,ap.player_position 
                             ,ap.fantasy_position
                             ,'STARTER' as fantasy_designation
-                            ,ap.player_order 
+                            ,CAST(ap.player_order AS BIGINT)
                             , null as league_id
                             from all_starters ap
                             UNION
@@ -354,18 +340,18 @@ SELECT
                             ,bp.player_position 
                             ,bp.player_position as fantasy_position
                             ,'BENCH' as fantasy_designation
-                            ,bp.player_order
+                            ,CAST(bp.player_order AS BIGINT)
                             , bp.league_id
                             from base_players bp where bp.player_id not in (select player_id from all_starters)
                             UNION ALL
-                            select 
+                            select DISTINCT
                             user_id
                             ,null as player_id
                             ,picks.ktc_player_id
                             ,'PICKS' as player_position 
                             ,'PICKS' as fantasy_position
                             ,'PICKS' as fantasy_designation
-                            , null as player_order
+                            ,CAST(null AS BIGINT) as player_order
                             , null as league_id
                             from base_picks picks
                             ) tp

@@ -291,6 +291,26 @@ class FleaflickerClient:
         return await self._make_api_call("FetchLeagueDraftBoard", params)
     
     # @cache(expire=CACHE_EXPIRATION)  # Disabled temporarily
+    async def fetch_team_picks(self, league_id: str, team_id: str) -> Dict:
+        """
+        Fetch future draft picks for a specific team.
+        
+        Args:
+            league_id: Fleaflicker league ID
+            team_id: Team ID
+            
+        Returns:
+            Team picks dictionary containing future draft picks
+        """
+        params = {
+            "sport": "NFL",
+            "league_id": league_id,
+            "team_id": team_id
+        }
+        
+        return await self._make_api_call("FetchTeamPicks", params)
+    
+    # @cache(expire=CACHE_EXPIRATION)  # Disabled temporarily
     async def fetch_player_listing(
         self, 
         filter_position: str = None,
