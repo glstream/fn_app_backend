@@ -159,13 +159,14 @@ SELECT
                     )
 
                     , base_picks as (
-                        SELECT DISTINCT 
+                        SELECT  
                             ft.owner_id as user_id
                             , dp.year as season
                             , dp.year 
                             , dp.year || ' ' || dp.round_name AS player_full_name 
                             , sf.ktc_player_id
                             , dp.roster_id  -- Include original roster to distinguish traded picks
+                            , dp.owner_id  -- Include to differentiate multiple picks with same name
                         FROM dynastr.draft_picks dp
                         INNER JOIN dynastr.fleaflicker_teams ft 
                             ON dp.owner_id = ft.team_id 
@@ -344,14 +345,14 @@ SELECT
                             , bp.league_id
                             from base_players bp where bp.player_id not in (select player_id from all_starters)
                             UNION ALL
-                            select DISTINCT
+                            select 
                             user_id
                             ,null as player_id
                             ,picks.ktc_player_id
                             ,'PICKS' as player_position 
                             ,'PICKS' as fantasy_position
                             ,'PICKS' as fantasy_designation
-                            ,CAST(null AS BIGINT) as player_order
+                            ,CAST(picks.roster_id AS BIGINT) as player_order
                             , null as league_id
                             from base_picks picks
                             ) tp

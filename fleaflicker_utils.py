@@ -1174,26 +1174,10 @@ async def extract_all_fleaflicker_draft_picks(league_id: str) -> List[Dict]:
                             if pick_key not in seen_picks:
                                 seen_picks.add(pick_key)
                                 
-                                # Use positional round names that match sf_player_ranks table
-                                if slot_position:
-                                    # Use actual slot position from API
-                                    round_name = _get_positional_round_name(round_num, slot_position, 12)
-                                else:
-                                    # Fallback: Estimate position based on original team ID
-                                    # Lower team IDs typically draft earlier (worse teams)
-                                    try:
-                                        team_id_num = int(original_id)
-                                        # Simple heuristic: divide teams into thirds based on team ID
-                                        if team_id_num % 3 == 1:
-                                            estimated_position = 3  # Early
-                                        elif team_id_num % 3 == 2:
-                                            estimated_position = 7  # Mid
-                                        else:
-                                            estimated_position = 11  # Late
-                                        round_name = _get_positional_round_name(round_num, estimated_position, 12)
-                                    except:
-                                        # Ultimate fallback to simple name
-                                        round_name = _get_round_suffix(round_num)
+                                # For Fleaflicker, always use 'Mid' designation for all future picks
+                                # This standardizes valuation regardless of actual draft position
+                                round_suffix = _get_round_suffix(round_num)
+                                round_name = f"Mid {round_suffix}"
                                 
                                 # Debug logging for important picks
                                 if season == 2026 and round_num == 2:
