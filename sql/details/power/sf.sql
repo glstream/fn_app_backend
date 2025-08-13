@@ -62,7 +62,7 @@ WITH base_players as (SELECT
                                     INNER JOIN dynastr.draft_positions dname on  dname.roster_id = al.roster_id and al.league_id = dname.league_id
                                 ) t1
                                 LEFT JOIN dynastr.sf_player_ranks sf on t1.player_full_name = sf.player_full_name
-                                where sf.rank_type = 'rank_type'
+                                where (sf.rank_type = 'rank_type' OR t1.player_full_name LIKE '%Round%' OR t1.player_full_name LIKE '%Early%' OR t1.player_full_name LIKE '%Mid%' OR t1.player_full_name LIKE '%Late%')
                                 
                                 UNION ALL
                                 
@@ -84,6 +84,12 @@ WITH base_players as (SELECT
                                 WHERE dp.league_id = 'league_id'
                                     AND dp.session_id = 'session_id'
                                     AND CAST(dp.round AS INTEGER) <= 4
+                                    -- Only include for Fleaflicker leagues
+                                    AND EXISTS (
+                                        SELECT 1 FROM dynastr.fleaflicker_teams ft2 
+                                        WHERE ft2.league_id = dp.league_id 
+                                        AND ft2.session_id = dp.session_id
+                                    )
                                     )						   
                     , starters as (SELECT  
                     qb.user_id

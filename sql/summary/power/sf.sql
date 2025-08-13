@@ -192,7 +192,34 @@ SELECT
                                 ) t1
                                 LEFT join dynastr.sf_player_ranks sf on t1.player_full_name = sf.player_full_name
                                 where 1=1
-                                and sf.rank_type = 'rank_type'
+                                and (sf.rank_type = 'rank_type' OR t1.player_full_name LIKE '%Round%' OR t1.player_full_name LIKE '%Early%' OR t1.player_full_name LIKE '%Mid%' OR t1.player_full_name LIKE '%Late%')
+                                
+                                UNION ALL
+                                
+                                -- Fleaflicker draft picks (from draft_picks table directly)
+                                SELECT 
+                                    ft.owner_id as user_id,
+                                    dp.year as season,
+                                    dp.year,
+                                    dp.year || ' ' || dp.round_name AS player_full_name,
+                                    sf.ktc_player_id
+                                FROM dynastr.draft_picks dp
+                                INNER JOIN dynastr.fleaflicker_teams ft 
+                                    ON dp.owner_id = ft.team_id 
+                                    AND dp.league_id = ft.league_id
+                                    AND dp.session_id = ft.session_id
+                                LEFT JOIN dynastr.sf_player_ranks sf 
+                                    ON (dp.year || ' ' || dp.round_name) = sf.player_full_name
+                                    AND sf.rank_type = 'rank_type'
+                                WHERE dp.league_id = 'league_id'
+                                    AND dp.session_id = 'session_id'
+                                    AND CAST(dp.round AS INTEGER) <= 4
+                                    -- Only include for Fleaflicker leagues
+                                    AND EXISTS (
+                                        SELECT 1 FROM dynastr.fleaflicker_teams ft2 
+                                        WHERE ft2.league_id = dp.league_id 
+                                        AND ft2.session_id = dp.session_id
+                                    )
                                     )              
                     , starters as (SELECT  
                     qb.user_id
