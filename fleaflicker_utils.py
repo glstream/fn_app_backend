@@ -139,9 +139,18 @@ async def get_fleaflicker_user_leagues_by_email(email: str, season: str, timesta
         Tuple of (user_id, list of league dictionaries)
     """
     try:
-        print(f"DEBUG: Attempting Fleaflicker email lookup for: {email}")
-        # Use FetchUserLeagues with email - this should return user info and leagues
+        print(f"DEBUG: Attempting Fleaflicker email lookup for: {email}, season: {season}")
+        
+        # Try the requested season first
         user_leagues_data = await fleaflicker_client.get_user_leagues(None, season, email)
+        
+        # If no leagues found and we're looking for 2024, also try 2025
+        if not user_leagues_data and season == "2024":
+            print(f"DEBUG: No leagues found for {season}, trying 2025...")
+            user_leagues_data = await fleaflicker_client.get_user_leagues(None, "2025", email)
+            if user_leagues_data:
+                print(f"DEBUG: Found leagues in 2025 season")
+                season = "2025"  # Update season for the returned data
         
         print(f"DEBUG: Fleaflicker API response for email {email}: {user_leagues_data}")
         
@@ -150,7 +159,7 @@ async def get_fleaflicker_user_leagues_by_email(email: str, season: str, timesta
             return None, []
         
         # Extract user_id from the response if available
-        # For email-based lookup, we can get the user_id from the ownedTeam information
+        # We need to get the numeric user ID from the league standings
         user_id = None  # Will be populated from response
         
         normalized_leagues = []
@@ -159,13 +168,28 @@ async def get_fleaflicker_user_leagues_by_email(email: str, season: str, timesta
             try:
                 league_id = str(league.get("id"))
                 
-                # Extract user_id from ownedTeam - the team owner is the user we're looking for
-                owned_team = league.get("ownedTeam", {})
-                if owned_team and not user_id:
-                    # The user_id should be extractable from the owned team data
-                    # Since we don't see an explicit user_id, we can use the team owner pattern
-                    # For now, we'll use a fallback approach
-                    user_id = email  # Use email as user_id identifier
+                # If we haven't found the user_id yet, try to get it from standings
+                if not user_id:
+                    try:
+                        standings = await fleaflicker_client.fetch_league_standings(league_id, season)
+                        owned_team = league.get("ownedTeam", {})
+                        owned_team_id = owned_team.get("id") if owned_team else None
+                        
+                        # Find the user's numeric ID from the standings
+                        for division in standings.get("divisions", []):
+                            for team in division.get("teams", []):
+                                if team.get("id") == owned_team_id:
+                                    for owner in team.get("owners", []):
+                                        # This is the owner of the user's team
+                                        user_id = str(owner.get("id"))
+                                        print(f"DEBUG: Found Fleaflicker user ID {user_id} for email {email}")
+                                        break
+                                if user_id:
+                                    break
+                            if user_id:
+                                break
+                    except Exception as e:
+                        print(f"DEBUG: Could not extract user ID from standings: {e}")
                 
                 # Get league rules for roster composition
                 rules = await fleaflicker_client.fetch_league_rules(league_id)
@@ -213,17 +237,19 @@ async def get_fleaflicker_user_leagues_by_email(email: str, season: str, timesta
                 
                 # Try to extract user_id from league data if not found yet
                 if not user_id:
-                    # Check if user_id is in the league response somehow
-                    # This might need adjustment based on actual API response
-                    user_id = league.get("user_id") or email  # Fallback to email
+                    # Last resort: check if user_id is in the league response somewhere
+                    # But never fall back to email - we want numeric IDs only
+                    user_id = league.get("user_id")  # No email fallback
                 
             except Exception as e:
                 print(f"Error processing league {league.get('id', 'unknown')}: {e}")
                 continue
         
-        # If we couldn't extract user_id from leagues, use email as fallback
+        # If we couldn't extract user_id from leagues, we'll return None
+        # This forces the calling code to handle the case properly
         if not user_id:
-            user_id = email
+            print(f"WARNING: Could not extract numeric user ID for email {email}")
+            return None, []
             
         return user_id, normalized_leagues
         

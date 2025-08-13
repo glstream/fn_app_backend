@@ -184,6 +184,13 @@ async def roster(roster_data: RosterDataModel, db=Depends(get_db)):
 async def ranks_summary(ranks_data: RanksDataModel, db=Depends(get_db)):
     print('attempt ranks summary')
     print(ranks_data)
+    
+    # Map platform names to ranking sources if needed
+    if ranks_data.rank_source == 'fleaflicker':
+        ranks_data.rank_source = 'ktc'  # Fleaflicker uses KTC rankings
+    elif ranks_data.rank_source == 'sleeper':
+        ranks_data.rank_source = 'sf'  # Sleeper uses SuperFlex rankings
+    
     return await insert_ranks_summary(db, ranks_data)
 
 
@@ -282,6 +289,12 @@ async def get_user(user_name: str):
 
 @app.get('/ranks')
 async def ranks(platform: str, db=Depends(get_db)):
+    # Map platforms to ranking sources first
+    if platform == 'sleeper':
+        platform = 'sf'  # Sleeper uses SuperFlex rankings
+    elif platform == 'fleaflicker':
+        platform = 'sf'  # Fleaflicker also uses SuperFlex rankings
+    
     # Ensure the SQL file exists and is readable
     sql_path = Path.cwd() / "sql" / "player_values" / "ranks" / f"{platform}.sql"
     if not sql_path.exists():
@@ -343,10 +356,22 @@ async def league_summary(league_id: str, platform: str, rank_type: str, guid: st
     result = await db.fetchrow(query, session_id, league_id)
     actual_platform = result['platform'] if result else platform
     print(f"DEBUG: Frontend sent platform={platform}, database has platform={actual_platform}")
-    platform = actual_platform
+    
+    # Map platforms to ranking sources
+    if actual_platform == 'sleeper':
+        platform = 'sf'  # Sleeper uses SuperFlex rankings
+    elif actual_platform == 'fleaflicker':
+        platform = 'sf'  # Fleaflicker also uses SuperFlex rankings  
+    else:
+        platform = actual_platform
     
     league_type = 'sf_value' if roster_type == 'Superflex' else 'one_qb_value'
-    rank_type = 'dynasty' if rank_type.lower() == 'dynasty' else 'redraft'
+    
+    # Special handling for Fleaflicker Keeper leagues (they are dynasty leagues)
+    if actual_platform == 'fleaflicker' and rank_type.lower() == 'keeper':
+        rank_type = 'dynasty'
+    else:
+        rank_type = 'dynasty' if rank_type.lower() == 'dynasty' else 'redraft'
 
     if platform in ['espn', 'cbs', 'nfl']:
         rank_source = 'contender'
@@ -431,10 +456,22 @@ async def league_detail(league_id: str, platform: str, rank_type: str, guid: str
     result = await db.fetchrow(query, session_id, league_id)
     actual_platform = result['platform'] if result else platform
     print(f"DEBUG: Frontend sent platform={platform}, database has platform={actual_platform}")
-    platform = actual_platform
+    
+    # Map platforms to ranking sources
+    if actual_platform == 'sleeper':
+        platform = 'sf'  # Sleeper uses SuperFlex rankings
+    elif actual_platform == 'fleaflicker':
+        platform = 'sf'  # Fleaflicker also uses SuperFlex rankings  
+    else:
+        platform = actual_platform
     
     league_type = 'sf_value' if roster_type.lower() == 'superflex' else 'one_qb_value'
-    rank_type = 'dynasty' if rank_type.lower() == 'dynasty' else 'redraft'
+    
+    # Special handling for Fleaflicker Keeper leagues (they are dynasty leagues)
+    if actual_platform == 'fleaflicker' and rank_type.lower() == 'keeper':
+        rank_type = 'dynasty'
+    else:
+        rank_type = 'dynasty' if rank_type.lower() == 'dynasty' else 'redraft'
 
     if platform == 'sf':
         league_pos_col = "superflex_sf_pos_rank" if roster_type.lower() == "superflex" else "superflex_one_qb_pos_rank"
@@ -472,13 +509,25 @@ async def league_detail(league_id: str, platform: str, rank_type: str, guid: str
 @app.get("/trades_detail")
 @cache(expire=CACHE_EXPIRATION)
 async def trades_detail(league_id: str, platform: str, roster_type: str, league_year: str, rank_type: str, db=Depends(get_db)):
+    # Store original platform before mapping
+    original_platform = platform
+    
+    # Map platforms to ranking sources first
+    if platform == 'sleeper':
+        platform = 'sf'  # Sleeper uses SuperFlex rankings
+    elif platform == 'fleaflicker':
+        platform = 'sf'  # Fleaflicker also uses SuperFlex rankings
+    
     league_type = 'sf_value' if roster_type == 'Superflex' else 'one_qb_value'
-    rank_type = 'dynasty' if rank_type.lower() == 'dynasty' else 'redraft'
+    
+    # Special handling for Fleaflicker Keeper leagues (they are dynasty leagues)
+    if original_platform == 'fleaflicker' and rank_type.lower() == 'keeper':
+        rank_type = 'dynasty'
+    else:
+        rank_type = 'dynasty' if rank_type.lower() == 'dynasty' else 'redraft'
 
     if platform == 'sf':
         league_type = "superflex_sf_value" if roster_type == "sf_value" else "superflex_one_qb_value"
-    elif platform == 'fleaflicker':
-        league_type = "superflex_sf_value" if roster_type.lower() == "superflex" else "superflex_one_qb_value"
     elif platform == 'dd':
         league_type = "sf_trade_value" if roster_type == "sf_value" else "trade_value"
 
@@ -515,13 +564,25 @@ async def trades_detail(league_id: str, platform: str, roster_type: str, league_
 @app.get("/trades_summary")
 @cache(expire=CACHE_EXPIRATION)
 async def trades_summary(league_id: str, platform: str, roster_type: str, league_year: str, rank_type: str, db=Depends(get_db)):
+    # Store original platform before mapping
+    original_platform = platform
+    
+    # Map platforms to ranking sources first
+    if platform == 'sleeper':
+        platform = 'sf'  # Sleeper uses SuperFlex rankings
+    elif platform == 'fleaflicker':
+        platform = 'sf'  # Fleaflicker also uses SuperFlex rankings
+    
     league_type = 'sf_value' if roster_type == 'Superflex' else 'one_qb_value'
-    rank_type = 'dynasty' if rank_type.lower() == 'dynasty' else 'redraft'
+    
+    # Special handling for Fleaflicker Keeper leagues (they are dynasty leagues)
+    if original_platform == 'fleaflicker' and rank_type.lower() == 'keeper':
+        rank_type = 'dynasty'
+    else:
+        rank_type = 'dynasty' if rank_type.lower() == 'dynasty' else 'redraft'
 
     if platform == 'sf':
         league_type = "superflex_sf_value" if roster_type == "sf_value" else "superflex_one_qb_value"
-    elif platform == 'fleaflicker':
-        league_type = "superflex_sf_value" if roster_type.lower() == "superflex" else "superflex_one_qb_value"
     elif platform == 'dd':
         league_type = "sf_trade_value" if roster_type == "sf_value" else "trade_value"
 
@@ -592,13 +653,25 @@ async def contender_league_detail(league_id: str, projection_source: str, guid: 
 @app.get("/best_available")
 @cache(expire=CACHE_EXPIRATION)
 async def best_available(league_id: str, platform: str, rank_type: str, guid: str, roster_type: str, db=Depends(get_db)):
+    # Store original platform before mapping
+    original_platform = platform
+    
+    # Map platforms to ranking sources first
+    if platform == 'sleeper':
+        platform = 'sf'  # Sleeper uses SuperFlex rankings
+    elif platform == 'fleaflicker':
+        platform = 'sf'  # Fleaflicker also uses SuperFlex rankings
+    
     session_id = guid
-    rank_type = 'dynasty' if rank_type.lower() == 'dynasty' else 'redraft'
+    
+    # Special handling for Fleaflicker Keeper leagues (they are dynasty leagues)
+    if original_platform == 'fleaflicker' and rank_type.lower() == 'keeper':
+        rank_type = 'dynasty'
+    else:
+        rank_type = 'dynasty' if rank_type.lower() == 'dynasty' else 'redraft'
 
     if platform == 'sf':
         league_type = "superflex_sf_value" if roster_type == "sf_value" else "superflex_one_qb_value"
-    elif platform == 'fleaflicker':
-        league_type = "superflex_sf_value" if roster_type.lower() == "superflex" else "superflex_one_qb_value"
     elif platform == 'dd':
         league_type = "sf_trade_value" if roster_type == "sf_value" else "trade_value"
     else:

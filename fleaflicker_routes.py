@@ -70,10 +70,20 @@ async def insert_current_leagues_fleaflicker(db, user_data: UserDataModel):
             for division in standings.get("divisions", []):
                 for team in division.get("teams", []):
                     for owner in team.get("owners", []):
-                        # Match by email or display name
-                        if (owner.get("displayName") == user_name or 
-                            (owner.get("email") and owner.get("email").lower() == user_name.lower())):
-                            fleaflicker_user_id = str(owner.get("id"))
+                        # Match by email or display name (but prefer ID)
+                        owner_email = owner.get("email", "")
+                        owner_display = owner.get("displayName", "")
+                        owner_id = owner.get("id")
+                        
+                        # If user_name is an email, match by email; otherwise match by display name
+                        if '@' in user_name and owner_email:
+                            if owner_email.lower() == user_name.lower():
+                                fleaflicker_user_id = str(owner_id)
+                                print(f"DEBUG: Found user by email match - ID: {fleaflicker_user_id}")
+                                break
+                        elif owner_display == user_name:
+                            fleaflicker_user_id = str(owner_id)
+                            print(f"DEBUG: Found user by display name match - ID: {fleaflicker_user_id}")
                             break
                     if fleaflicker_user_id:
                         break
@@ -169,9 +179,32 @@ async def insert_current_leagues_fleaflicker(db, user_data: UserDataModel):
                     platform = excluded.platform
             """, values)
             
-            # Save the username to user_searches table for future reference
-            # Use the first found Fleaflicker user ID if available
+            # Save to user_searches table for future reference
+            # Use the first found Fleaflicker user ID if available, and store username not email
             search_user_id = enriched_leagues[0][0] if enriched_leagues else user_id
+            
+            # If user_name is an email, we need to extract the username from the API response
+            display_name = user_name
+            user_identifier = user_name
+            
+            # For email-based lookup, let's use the username from the standings
+            if '@' in user_name and enriched_leagues:
+                try:
+                    # Get the first league and fetch its standings to find the username
+                    first_league_id = enriched_leagues[0][1][1]  # league_id is at index 1
+                    standings = await fleaflicker_client.fetch_league_standings(first_league_id)
+                    
+                    for division in standings.get("divisions", []):
+                        for team in division.get("teams", []):
+                            for owner in team.get("owners", []):
+                                if owner.get("email", "").lower() == user_name.lower():
+                                    display_name = owner.get("displayName", user_name)
+                                    user_identifier = display_name  # Use username, not email
+                                    print(f"DEBUG: Using username '{display_name}' instead of email for storage")
+                                    break
+                except Exception as e:
+                    print(f"DEBUG: Could not extract username, using original identifier: {e}")
+            
             await db.execute("""
                 INSERT INTO dynastr.user_searches (
                     user_identifier, 
@@ -187,7 +220,7 @@ async def insert_current_leagues_fleaflicker(db, user_data: UserDataModel):
                     last_used = NOW(),
                     league_year = EXCLUDED.league_year,
                     user_id = EXCLUDED.user_id
-            """, user_name, 'fleaflicker', user_name, search_user_id, league_year)
+            """, user_identifier, 'fleaflicker', display_name, search_user_id, league_year)
             
         return {"status": "success", "leagues_inserted": len(values)}
         

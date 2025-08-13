@@ -235,9 +235,9 @@ WITH base_players as (SELECT
                             ) tp
                     left join dynastr.players p on tp.player_id = p.player_id
                     LEFT JOIN dynastr.sf_player_ranks sf on tp.ktc_player_id = sf.ktc_player_id
-                    inner join dynastr.managers m on tp.user_id = m.user_id 
+                    left join dynastr.managers m on tp.user_id = m.user_id 
                     where 1=1
-                    and sf.rank_type = 'rank_type'
+                    and (sf.rank_type = 'rank_type' OR tp.player_position = 'PICKS')
                     order by 
 					player_value desc,
                     CASE WHEN tp.player_position = 'PICKS' THEN tp.draft_year END ASC

@@ -63,6 +63,27 @@ WITH base_players as (SELECT
                                 ) t1
                                 LEFT JOIN dynastr.sf_player_ranks sf on t1.player_full_name = sf.player_full_name
                                 where sf.rank_type = 'rank_type'
+                                
+                                UNION ALL
+                                
+                                -- Fleaflicker draft picks (from draft_picks table directly)
+                                SELECT 
+                                    ft.owner_id as user_id,
+                                    dp.year as season,
+                                    dp.year,
+                                    dp.year || ' ' || dp.round_name AS player_full_name,
+                                    sf.ktc_player_id
+                                FROM dynastr.draft_picks dp
+                                INNER JOIN dynastr.fleaflicker_teams ft 
+                                    ON dp.owner_id = ft.team_id 
+                                    AND dp.league_id = ft.league_id
+                                    AND dp.session_id = ft.session_id
+                                LEFT JOIN dynastr.sf_player_ranks sf 
+                                    ON (dp.year || ' ' || dp.round_name) = sf.player_full_name
+                                    AND sf.rank_type = 'rank_type'
+                                WHERE dp.league_id = 'league_id'
+                                    AND dp.session_id = 'session_id'
+                                    AND CAST(dp.round AS INTEGER) <= 4
                                     )						   
                     , starters as (SELECT  
                     qb.user_id
@@ -248,7 +269,7 @@ WITH base_players as (SELECT
                     LEFT JOIN dynastr.sf_player_ranks sf on tp.ktc_player_id = sf.ktc_player_id
                     inner join dynastr.managers m on tp.user_id = m.user_id 
                     where 1=1
-                    and sf.rank_type = 'rank_type'
+                    and (sf.rank_type = 'rank_type' OR tp.player_position = 'PICKS')
                     order by 
                     
 					player_value desc,
