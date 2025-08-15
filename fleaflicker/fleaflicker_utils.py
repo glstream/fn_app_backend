@@ -81,14 +81,38 @@ async def get_fleaflicker_user_leagues_by_ids(username: str, season: str, league
             # Parse roster positions from rules
             roster_positions = rules.get("rosterPositions", [])
             
-            # Count position slots
-            qbs = sum(1 for p in roster_positions if p.get("position") == "QB")
-            rbs = sum(1 for p in roster_positions if p.get("position") == "RB")
-            wrs = sum(1 for p in roster_positions if p.get("position") == "WR")
-            tes = sum(1 for p in roster_positions if p.get("position") == "TE")
-            flexes = sum(1 for p in roster_positions if "FLEX" in p.get("position", "") and "SUPER" not in p.get("position", ""))
-            super_flexes = sum(1 for p in roster_positions if "SUPER_FLEX" in p.get("position", ""))
-            rec_flexes = sum(1 for p in roster_positions if "REC_FLEX" in p.get("position", ""))
+            # Count position slots with debug logging
+            print(f"DEBUG: Processing {len(roster_positions)} roster positions for league {league_id}")
+            if roster_positions:
+                print(f"DEBUG: First few positions: {roster_positions[:3]}")
+            
+            # Count positions using the correct Fleaflicker API field structure
+            # Fleaflicker uses "label" field, not "position", and "group": "START" for starters
+            qbs = sum(1 for p in roster_positions if p.get("label") == "QB" and p.get("group") == "START")
+            rbs = sum(1 for p in roster_positions if p.get("label") == "RB" and p.get("group") == "START")
+            wrs = sum(1 for p in roster_positions if p.get("label") == "WR" and p.get("group") == "START")
+            tes = sum(1 for p in roster_positions if p.get("label") == "TE" and p.get("group") == "START")
+            flexes = sum(1 for p in roster_positions if "FLEX" in p.get("label", "") and "SUPER" not in p.get("label", "") and p.get("group") == "START")
+            super_flexes = sum(1 for p in roster_positions if "SUPER_FLEX" in p.get("label", "") and p.get("group") == "START")
+            rec_flexes = sum(1 for p in roster_positions if "REC_FLEX" in p.get("label", "") and p.get("group") == "START")
+            
+            # Also check for common Fleaflicker flex position names
+            if flexes == 0:
+                # Check for "W/R/T", "RB/WR/TE", etc. using the "label" field
+                flexes = sum(1 for p in roster_positions if any(x in p.get("label", "").upper() for x in ["W/R", "R/W", "/TE", "FLEX"]) and p.get("group") == "START")
+            
+            print(f"DEBUG: Position counts - QB:{qbs} RB:{rbs} WR:{wrs} TE:{tes} FLEX:{flexes} SF:{super_flexes} RF:{rec_flexes}")
+            
+            # If all positions are 0, use reasonable defaults based on total roster size
+            if qbs == 0 and rbs == 0 and wrs == 0 and tes == 0:
+                print(f"DEBUG: No positions found, using defaults for {total_teams} team league")
+                qbs = 1  # Most leagues have 1 QB
+                rbs = 2  # Common: 2 RB
+                wrs = 2  # Common: 2-3 WR  
+                tes = 1  # Common: 1 TE
+                flexes = 1  # Common: 1 FLEX
+                super_flexes = 1 if total_teams >= 10 else 0  # SuperFlex if 10+ teams
+                print(f"DEBUG: Using defaults - QB:{qbs} RB:{rbs} WR:{wrs} TE:{tes} FLEX:{flexes} SF:{super_flexes}")
             
             starters = sum([qbs, rbs, wrs, tes, flexes, super_flexes, rec_flexes])
             total_roster = len(roster_positions)
@@ -97,6 +121,7 @@ async def get_fleaflicker_user_leagues_by_ids(username: str, season: str, league
             league_cat = 2 if super_flexes > 0 else 1
             
             league_name = standings.get("league", {}).get("name", f"League {league_id}")
+            print(f"DEBUG: Final calculated values for league {league_id} '{league_name}': starters={starters}, total_roster={total_roster}, league_cat={league_cat}")
             
             normalized_leagues.append((
                 league_name,
@@ -197,23 +222,54 @@ async def get_fleaflicker_user_leagues_by_email(email: str, season: str, timesta
                 # Parse roster positions from rules
                 roster_positions = rules.get("rosterPositions", [])
                 
-                # Count position slots
-                qbs = sum(1 for p in roster_positions if p.get("position") == "QB")
-                rbs = sum(1 for p in roster_positions if p.get("position") == "RB")
-                wrs = sum(1 for p in roster_positions if p.get("position") == "WR")
-                tes = sum(1 for p in roster_positions if p.get("position") == "TE")
-                flexes = sum(1 for p in roster_positions if "FLEX" in p.get("position", "") and "SUPER" not in p.get("position", ""))
-                super_flexes = sum(1 for p in roster_positions if "SUPER_FLEX" in p.get("position", ""))
-                rec_flexes = sum(1 for p in roster_positions if "REC_FLEX" in p.get("position", ""))
+                # Count position slots with debug logging
+                print(f"DEBUG: Processing {len(roster_positions)} roster positions for league {league_id}")
+                if roster_positions:
+                    print(f"DEBUG: First few positions: {roster_positions[:3]}")
+                
+                # Count positions using the correct Fleaflicker API field structure
+                # Fleaflicker uses "label" field, not "position", and "group": "START" for starters
+                qbs = sum(1 for p in roster_positions if p.get("label") == "QB" and p.get("group") == "START")
+                rbs = sum(1 for p in roster_positions if p.get("label") == "RB" and p.get("group") == "START")
+                wrs = sum(1 for p in roster_positions if p.get("label") == "WR" and p.get("group") == "START")
+                tes = sum(1 for p in roster_positions if p.get("label") == "TE" and p.get("group") == "START")
+                flexes = sum(1 for p in roster_positions if "FLEX" in p.get("label", "") and "SUPER" not in p.get("label", "") and p.get("group") == "START")
+                super_flexes = sum(1 for p in roster_positions if "SUPER_FLEX" in p.get("label", "") and p.get("group") == "START")
+                rec_flexes = sum(1 for p in roster_positions if "REC_FLEX" in p.get("label", "") and p.get("group") == "START")
+                
+                # Also check for common Fleaflicker flex position names
+                if flexes == 0:
+                    # Check for "W/R/T", "RB/WR/TE", etc. using the "label" field
+                    flexes = sum(1 for p in roster_positions if any(x in p.get("label", "").upper() for x in ["W/R", "R/W", "/TE", "FLEX"]) and p.get("group") == "START")
+                
+                print(f"DEBUG: Position counts - QB:{qbs} RB:{rbs} WR:{wrs} TE:{tes} FLEX:{flexes} SF:{super_flexes} RF:{rec_flexes}")
+                
+                # If all positions are 0, use reasonable defaults
+                if qbs == 0 and rbs == 0 and wrs == 0 and tes == 0:
+                    total_teams = league.get("size", 10) if 'league' in locals() else 10
+                    print(f"DEBUG: No positions found, using defaults for {total_teams} team league")
+                    qbs = 1  # Most leagues have 1 QB
+                    rbs = 2  # Common: 2 RB
+                    wrs = 2  # Common: 2-3 WR  
+                    tes = 1  # Common: 1 TE
+                    flexes = 1  # Common: 1 FLEX
+                    super_flexes = 1 if total_teams >= 10 else 0  # SuperFlex if 10+ teams
+                    print(f"DEBUG: Using defaults - QB:{qbs} RB:{rbs} WR:{wrs} TE:{tes} FLEX:{flexes} SF:{super_flexes}")
                 
                 starters = sum([qbs, rbs, wrs, tes, flexes, super_flexes, rec_flexes])
                 total_roster = len(roster_positions)
+                
+                # If total_roster is 0, use reasonable default for total roster size
+                if total_roster == 0:
+                    total_roster = starters + 10  # Assume 10 bench spots
+                    print(f"DEBUG: No roster positions found, using total_roster = {total_roster}")
                 
                 # Determine league category (1=standard, 2=superflex)
                 league_cat = 2 if super_flexes > 0 else 1
                 
                 league_name = league.get("name", f"League {league_id}")
                 total_teams = league.get("size", 0)
+                print(f"DEBUG: Final calculated values for league {league_id} '{league_name}': starters={starters}, total_roster={total_roster}, league_cat={league_cat}")
                 
                 normalized_leagues.append((
                     league_name,
@@ -298,23 +354,54 @@ async def get_fleaflicker_user_leagues(user_id: str, season: str, email: str = N
                 # Parse roster positions from rules
                 roster_positions = rules.get("rosterPositions", [])
                 
-                # Count position slots
-                qbs = sum(1 for p in roster_positions if p.get("position") == "QB")
-                rbs = sum(1 for p in roster_positions if p.get("position") == "RB")
-                wrs = sum(1 for p in roster_positions if p.get("position") == "WR")
-                tes = sum(1 for p in roster_positions if p.get("position") == "TE")
-                flexes = sum(1 for p in roster_positions if "FLEX" in p.get("position", "") and "SUPER" not in p.get("position", ""))
-                super_flexes = sum(1 for p in roster_positions if "SUPER_FLEX" in p.get("position", ""))
-                rec_flexes = sum(1 for p in roster_positions if "REC_FLEX" in p.get("position", ""))
+                # Count position slots with debug logging
+                print(f"DEBUG: Processing {len(roster_positions)} roster positions for league {league_id}")
+                if roster_positions:
+                    print(f"DEBUG: First few positions: {roster_positions[:3]}")
+                
+                # Count positions using the correct Fleaflicker API field structure
+                # Fleaflicker uses "label" field, not "position", and "group": "START" for starters
+                qbs = sum(1 for p in roster_positions if p.get("label") == "QB" and p.get("group") == "START")
+                rbs = sum(1 for p in roster_positions if p.get("label") == "RB" and p.get("group") == "START")
+                wrs = sum(1 for p in roster_positions if p.get("label") == "WR" and p.get("group") == "START")
+                tes = sum(1 for p in roster_positions if p.get("label") == "TE" and p.get("group") == "START")
+                flexes = sum(1 for p in roster_positions if "FLEX" in p.get("label", "") and "SUPER" not in p.get("label", "") and p.get("group") == "START")
+                super_flexes = sum(1 for p in roster_positions if "SUPER_FLEX" in p.get("label", "") and p.get("group") == "START")
+                rec_flexes = sum(1 for p in roster_positions if "REC_FLEX" in p.get("label", "") and p.get("group") == "START")
+                
+                # Also check for common Fleaflicker flex position names
+                if flexes == 0:
+                    # Check for "W/R/T", "RB/WR/TE", etc. using the "label" field
+                    flexes = sum(1 for p in roster_positions if any(x in p.get("label", "").upper() for x in ["W/R", "R/W", "/TE", "FLEX"]) and p.get("group") == "START")
+                
+                print(f"DEBUG: Position counts - QB:{qbs} RB:{rbs} WR:{wrs} TE:{tes} FLEX:{flexes} SF:{super_flexes} RF:{rec_flexes}")
+                
+                # If all positions are 0, use reasonable defaults
+                if qbs == 0 and rbs == 0 and wrs == 0 and tes == 0:
+                    total_teams = league.get("size", 10) if 'league' in locals() else 10
+                    print(f"DEBUG: No positions found, using defaults for {total_teams} team league")
+                    qbs = 1  # Most leagues have 1 QB
+                    rbs = 2  # Common: 2 RB
+                    wrs = 2  # Common: 2-3 WR  
+                    tes = 1  # Common: 1 TE
+                    flexes = 1  # Common: 1 FLEX
+                    super_flexes = 1 if total_teams >= 10 else 0  # SuperFlex if 10+ teams
+                    print(f"DEBUG: Using defaults - QB:{qbs} RB:{rbs} WR:{wrs} TE:{tes} FLEX:{flexes} SF:{super_flexes}")
                 
                 starters = sum([qbs, rbs, wrs, tes, flexes, super_flexes, rec_flexes])
                 total_roster = len(roster_positions)
+                
+                # If total_roster is 0, use reasonable default for total roster size
+                if total_roster == 0:
+                    total_roster = starters + 10  # Assume 10 bench spots
+                    print(f"DEBUG: No roster positions found, using total_roster = {total_roster}")
                 
                 # Determine league category (1=standard, 2=superflex)
                 league_cat = 2 if super_flexes > 0 else 1
                 
                 league_name = league.get("name", f"League {league_id}")
                 total_teams = league.get("size", 0)
+                print(f"DEBUG: Final calculated values for league {league_id} '{league_name}': starters={starters}, total_roster={total_roster}, league_cat={league_cat}")
                 
                 normalized_leagues.append((
                     league_name,
