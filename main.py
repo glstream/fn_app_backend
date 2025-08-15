@@ -673,3 +673,40 @@ async def clear_league_cache(league_id: Optional[str] = None):
     else:
         await FastAPICache.clear()
         return {"message": "All cache cleared"}
+
+
+# NEW RANKING SOURCE ROUTES
+# These routes follow the new pattern: /{rankingSource}/summary, /{rankingSource}/details, /{rankingSource}/best_available
+
+@app.get("/{ranking_source}/summary")
+@cache(expire=LEAGUE_CACHE_EXPIRATION)
+async def ranking_source_summary(ranking_source: str, league_id: str, platform: str, rank_type: str, guid: str, roster_type: str, db=Depends(get_db), timestamp: Optional[str] = None):
+    """
+    Get league summary data for a specific ranking source.
+    ranking_source: sf, ktc, dp, fc, dd
+    platform: sleeper, fleaflicker (league platform, not ranking source)
+    """
+    # Call the existing league_summary function but pass ranking_source as platform parameter
+    return await league_summary(league_id, ranking_source, rank_type, guid, roster_type, db, timestamp)
+
+@app.get("/{ranking_source}/details")
+@cache(expire=LEAGUE_CACHE_EXPIRATION)
+async def ranking_source_details(ranking_source: str, league_id: str, platform: str, rank_type: str, guid: str, roster_type: str, db=Depends(get_db), timestamp: Optional[str] = None):
+    """
+    Get league detail data for a specific ranking source.
+    ranking_source: sf, ktc, dp, fc, dd
+    platform: sleeper, fleaflicker (league platform, not ranking source)
+    """
+    # Call the existing league_detail function but pass ranking_source as platform parameter
+    return await league_detail(league_id, ranking_source, rank_type, guid, roster_type, db, timestamp)
+
+@app.get("/{ranking_source}/best_available")
+@cache(expire=CACHE_EXPIRATION)
+async def ranking_source_best_available(ranking_source: str, league_id: str, platform: str, rank_type: str, guid: str, roster_type: str, db=Depends(get_db)):
+    """
+    Get best available players for a specific ranking source.
+    ranking_source: sf, ktc, dp, fc, dd
+    platform: sleeper, fleaflicker (league platform, not ranking source)
+    """
+    # Call the existing best_available function but pass ranking_source as platform parameter
+    return await best_available(league_id, ranking_source, rank_type, guid, roster_type, db)
