@@ -450,82 +450,47 @@ async def get_fleaflicker_managers(league_id: str, timestamp: str = None) -> Lis
     return manager_data
 
 
-async def _ensure_fleaflicker_player_exists(db, player_id: str, player_name: str, pro_player: Dict):
-    """
-    Ensure a Fleaflicker player exists in the players table for mapping to rankings.
-    
-    Args:
-        db: Database connection
-        player_id: Fleaflicker player ID
-        player_name: Full player name
-        pro_player: Full pro player data from API
-    """
-    try:
-        # Extract player details from Fleaflicker data
-        position = pro_player.get("position", "UNKNOWN")
-        team = pro_player.get("proTeamAbbreviation", "")
-        
-        # Insert or update player record
-        sql = """
-            INSERT INTO dynastr.players (player_id, full_name, player_position, team)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT (player_id) 
-            DO UPDATE SET 
-                full_name = EXCLUDED.full_name,
-                player_position = EXCLUDED.player_position,
-                team = EXCLUDED.team;
-        """
-        
-        await db.execute(sql, player_id, player_name, position, team)
-        print(f"Ensured player record exists: {player_name} ({player_id})")
-        
-    except Exception as e:
-        print(f"Error ensuring player exists {player_name}: {e}")
+# REMOVED: Player records should come from centralized player load API, not platform-specific inserts
+# async def _ensure_fleaflicker_player_exists(db, player_id: str, player_name: str, pro_player: Dict):
+#     """
+#     Ensure a Fleaflicker player exists in the players table for mapping to rankings.
+#     
+#     Args:
+#         db: Database connection
+#         player_id: Fleaflicker player ID
+#         player_name: Full player name
+#         pro_player: Full pro player data from API
+#     """
+#     try:
+#         # Extract player details from Fleaflicker data
+#         position = pro_player.get("position", "UNKNOWN")
+#         team = pro_player.get("proTeamAbbreviation", "")
+#         
+#         # Insert or update player record
+#         sql = """
+#             INSERT INTO dynastr.players (player_id, full_name, player_position, team)
+#             VALUES ($1, $2, $3, $4)
+#             ON CONFLICT (player_id) 
+#             DO UPDATE SET 
+#                 full_name = EXCLUDED.full_name,
+#                 player_position = EXCLUDED.player_position,
+#                 team = EXCLUDED.team;
+#         """
+#         
+#         await db.execute(sql, player_id, player_name, position, team)
+#         print(f"Ensured player record exists: {player_name} ({player_id})")
+#         
+#     except Exception as e:
+#         print(f"Error ensuring player exists {player_name}: {e}")
 
 
-async def _create_fleaflicker_player_records(db, player_details: List[Dict]):
-    """
-    Create player records for all Fleaflicker players to enable mapping to rankings.
-    
-    Args:
-        db: Database connection
-        player_details: List of player detail dictionaries
-    """
-    try:
-        player_records = []
-        for player_detail in player_details:
-            player_id = player_detail["player_id"]
-            player_name = player_detail["player_name"]
-            pro_player = player_detail["pro_player"]
-            
-            # Extract player details
-            position = pro_player.get("position", "UNKNOWN")
-            team = pro_player.get("proTeamAbbreviation", "")
-            first_name = pro_player.get("nameFirst", "")
-            last_name = pro_player.get("nameLast", "")
-            
-            player_records.append((player_id, player_name, position, team, first_name, last_name))
-        
-        if player_records:
-            sql = """
-                INSERT INTO dynastr.players (player_id, full_name, player_position, team, first_name, last_name)
-                VALUES ($1, $2, $3, $4, $5, $6)
-                ON CONFLICT (player_id) 
-                DO UPDATE SET 
-                    full_name = EXCLUDED.full_name,
-                    player_position = EXCLUDED.player_position,
-                    team = EXCLUDED.team,
-                    first_name = EXCLUDED.first_name,
-                    last_name = EXCLUDED.last_name;
-            """
-            
-            async with db.transaction():
-                await db.executemany(sql, player_records)
-            
-            print(f"Created/updated {len(player_records)} Fleaflicker player records")
-    
-    except Exception as e:
-        print(f"Error creating Fleaflicker player records: {e}")
+# DO NOT INSERT INTO dynastr.players - player records should only come from centralized player load API
+# async def _create_fleaflicker_player_records(db, player_details: List[Dict]):
+#     """
+#     REMOVED: Platform integrations should not insert into dynastr.players
+#     Player records should only come from a centralized player load API
+#     """
+#     pass
 
 
 def _has_players_in_roster(roster_data: Dict) -> bool:
@@ -818,9 +783,38 @@ async def insert_fleaflicker_league_rosters(db, session_id: str, user_id: str, l
         if "player_details" in roster:
             all_player_details.extend(roster["player_details"])
     
-    # Create player records for mapping
-    if all_player_details:
-        await _create_fleaflicker_player_records(db, all_player_details)
+    # DO NOT INSERT INTO dynastr.players - player records should only come from centralized player load API
+    # Platform integrations should only track player ownership in dynastr.league_players
+    # if all_player_details:
+    #     await _create_fleaflicker_player_records(db, all_player_details)
+    
+    # Create a mapping of Fleaflicker player IDs to player names
+    fleaflicker_to_name_map = {}
+    for roster in rosters:
+        if "player_details" in roster:
+            for detail in roster["player_details"]:
+                fleaflicker_to_name_map[detail["player_id"]] = detail["player_name"]
+    
+    # Look up existing player IDs from dynastr.players by name
+    player_name_to_id_map = {}
+    if fleaflicker_to_name_map:
+        # Get all unique player names
+        player_names = list(set(fleaflicker_to_name_map.values()))
+        
+        # Query dynastr.players to get the correct player IDs by name
+        query = """
+            SELECT player_id, full_name 
+            FROM dynastr.players 
+            WHERE full_name = ANY($1)
+        """
+        
+        try:
+            results = await db.fetch(query, player_names)
+            for row in results:
+                player_name_to_id_map[row['full_name']] = row['player_id']
+            print(f"DEBUG: Mapped {len(player_name_to_id_map)} players from dynastr.players")
+        except Exception as e:
+            print(f"DEBUG: Error looking up players: {e}")
     
     league_players = []
     
@@ -829,16 +823,27 @@ async def insert_fleaflicker_league_rosters(db, session_id: str, user_id: str, l
         team_id = roster.get("team_id")
         player_list = roster.get("players", [])
         
-        for player_id in player_list:
+        for fleaflicker_player_id in player_list:
+            # Map Fleaflicker player ID to the correct player ID in dynastr.players
+            player_name = fleaflicker_to_name_map.get(fleaflicker_player_id)
             
-            league_players.append((
-                session_id,           # $1: session_id  
-                user_id,             # $2: owner_user_id (requesting user) - MATCH utils.py
-                str(player_id),      # $3: player_id (ensure string)
-                league_id,           # $4: league_id
-                str(owner_id),       # $5: user_id (ROSTER OWNER) - MATCH utils.py
-                str(entry_time)      # $6: insert_date (ensure string)
-            ))
+            if player_name:
+                # Use the mapped player_id from dynastr.players if found
+                correct_player_id = player_name_to_id_map.get(player_name)
+                
+                if correct_player_id:
+                    league_players.append((
+                        session_id,           # $1: session_id  
+                        user_id,             # $2: owner_user_id (requesting user)
+                        str(correct_player_id), # $3: player_id from dynastr.players (mapped by name)
+                        league_id,           # $4: league_id
+                        str(owner_id),       # $5: user_id (ROSTER OWNER)
+                        str(entry_time)      # $6: insert_date
+                    ))
+                else:
+                    print(f"DEBUG: No mapping found for player: {player_name} (Fleaflicker ID: {fleaflicker_player_id})")
+            else:
+                print(f"DEBUG: No name found for Fleaflicker player ID: {fleaflicker_player_id}")
     
     if not league_players:
         return
