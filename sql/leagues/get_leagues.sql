@@ -20,6 +20,7 @@ select ROW_NUMBER() OVER() as key
     WHEN league_cat = 1 THEN 'Keeper' 
     ELSE 'Dynasty' END AS league_type
 , league_year
+, COALESCE(cl.platform, 'sleeper') as platform
 , rs.ktc_power_rank
 , rs.sf_power_rank
 , rs.fc_power_rank
@@ -52,3 +53,4 @@ where 1=1
 and session_id = 'session_id'
 and cl.user_id ='user_id'
 and league_year = 'league_year'
+and COALESCE(cl.platform, 'sleeper') = 'platform'

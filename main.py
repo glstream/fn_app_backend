@@ -19,6 +19,14 @@ from db import init_db_pool, close_db, get_db
 from superflex_models import UserDataModel, LeagueDataModel, RosterDataModel, RanksDataModel
 from utils import (get_user_id, insert_current_leagues, player_manager_rosters, insert_ranks_summary,
                    close_http_session)  # Import close_http_session
+from fleaflicker.fleaflicker_utils import (
+    get_fleaflicker_user_id, get_fleaflicker_user_leagues,
+    player_manager_rosters_fleaflicker, insert_fleaflicker_teams,
+    insert_fleaflicker_scoreboards, insert_fleaflicker_transactions,
+    insert_fleaflicker_ranks_summary
+)
+from fleaflicker.fleaflicker_client import fleaflicker_client
+from fleaflicker.fleaflicker_routes import router as fleaflicker_router, insert_current_leagues_fleaflicker
 
 # Load environment variables from .env file
 load_dotenv()
@@ -28,6 +36,9 @@ origins = [
 ]
 
 app = FastAPI()
+
+# Add Fleaflicker router
+app.include_router(fleaflicker_router)
 
 # Add GZipMiddleware first, it should be one of the first middlewares
 app.add_middleware(GZipMiddleware, minimum_size=1000)  # Compress responses larger than 1KB
@@ -62,49 +73,209 @@ async def shutdown_event():
 
 
 # POST ROUTES
+@app.get("/saved_usernames")
+async def get_all_saved_usernames(platform: Optional[str] = None, db=Depends(get_db)):
+    """
+    Get saved usernames from previous searches across all platforms or for a specific platform.
+    
+    Args:
+        platform: Optional platform filter (fleaflicker, sleeper, etc.)
+        
+    Returns:
+        List of previously searched usernames with metadata
+    """
+    try:
+        if platform:
+            query = """
+                SELECT 
+                    user_identifier,
+                    platform,
+                    display_name,
+                    user_id,
+                    league_year,
+                    last_used
+                FROM dynastr.user_searches
+                WHERE platform = $1
+                ORDER BY last_used DESC
+                LIMIT 20
+            """
+            results = await db.fetch(query, platform)
+        else:
+            query = """
+                SELECT 
+                    user_identifier,
+                    platform,
+                    display_name,
+                    user_id,
+                    league_year,
+                    last_used
+                FROM dynastr.user_searches
+                ORDER BY last_used DESC
+                LIMIT 50
+            """
+            results = await db.fetch(query)
+        
+        usernames = []
+        for row in results:
+            usernames.append({
+                "user_identifier": row["user_identifier"],
+                "platform": row["platform"],
+                "display_name": row["display_name"] or row["user_identifier"],
+                "user_id": row["user_id"],
+                "league_year": row["league_year"],
+                "last_used": row["last_used"].isoformat() if row["last_used"] else None
+            })
+        
+        return {"status": "success", "usernames": usernames}
+        
+    except Exception as e:
+        return {"status": "error", "message": str(e), "usernames": []}
+
+
 @app.post("/user_details")
 async def user_details(user_data: UserDataModel, db=Depends(get_db)):
-    return await insert_current_leagues(db, user_data)
+    # Check if platform is specified, default to sleeper
+    platform = getattr(user_data, 'platform', 'sleeper')
+    
+    if platform == 'fleaflicker':
+        # Handle Fleaflicker league insertion
+        return await insert_current_leagues_fleaflicker(db, user_data)
+    else:
+        # Default Sleeper behavior
+        return await insert_current_leagues(db, user_data)
 
 
 @app.post("/roster")
 async def roster(roster_data: RosterDataModel, db=Depends(get_db)):
-    print('attempt rosters')
-    return await player_manager_rosters(db, roster_data)
+    # print removed for production
+    # Check platform from roster data or database
+    platform = getattr(roster_data, 'platform', None)
+    # print removed for production
+    
+    if not platform:
+        # Query the platform from current_leagues table
+        query = """SELECT platform FROM dynastr.current_leagues 
+                   WHERE session_id = $1 AND league_id = $2 LIMIT 1"""
+        result = await db.fetchrow(query, roster_data.guid, roster_data.league_id)
+        platform = result['platform'] if result else 'sleeper'
+        # print removed for production
+    
+    # print removed for production
+    if platform == 'fleaflicker':
+        # print removed for production
+        result = await player_manager_rosters_fleaflicker(db, roster_data)
+        
+        # After loading rosters, calculate and save rankings
+        try:
+            # print removed for production
+            ranks_result = await insert_fleaflicker_ranks_summary(db, roster_data.guid, roster_data.league_id)
+            # print removed for production
+        except Exception as e:
+            # Don't fail the roster load if rankings fail
+            pass
+        
+        return result
+    else:
+        # print removed for production
+        return await player_manager_rosters(db, roster_data)
 
 
 @app.post("/ranks_summary")
 async def ranks_summary(ranks_data: RanksDataModel, db=Depends(get_db)):
-    print('attempt ranks summary')
-    print(ranks_data)
+    # print removed for production
+    
+    # Map platform names to ranking sources if needed
+    if ranks_data.rank_source == 'fleaflicker':
+        ranks_data.rank_source = 'ktc'  # Fleaflicker uses KTC rankings
+    elif ranks_data.rank_source == 'sleeper':
+        ranks_data.rank_source = 'sf'  # Sleeper uses SuperFlex rankings
+    
     return await insert_ranks_summary(db, ranks_data)
+
+
+@app.post("/fleaflicker_ranks_summary")
+async def fleaflicker_ranks_summary(data: dict, db=Depends(get_db)):
+    """
+    Calculate and insert Fleaflicker power rankings.
+    
+    Expected data format:
+    {
+        "session_id": "session-guid",
+        "league_id": "league-id",
+        "rank_source": "ktc" (optional, defaults to ktc)
+    }
+    """
+    try:
+        session_id = data.get("session_id")
+        league_id = data.get("league_id") 
+        rank_source = data.get("rank_source", "ktc")
+        
+        if not session_id or not league_id:
+            return {"status": "error", "message": "session_id and league_id are required"}
+            
+        result = await insert_fleaflicker_ranks_summary(db, session_id, league_id, rank_source)
+        return result
+        
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 
 # GET ROUTES with caching
 @app.get("/leagues")
 @cache(expire=LEAGUE_CACHE_EXPIRATION)
-async def leagues(league_year: str, user_name: str, guid: str, db=Depends(get_db), _cb: Optional[str] = None, timestamp: Optional[str] = None):
+async def leagues(league_year: str, user_name: str, guid: str, platform: str = "sleeper", league_ids: Optional[str] = None, db=Depends(get_db), _cb: Optional[str] = None, timestamp: Optional[str] = None):
     # _cb and timestamp parameters can be used for cache busting from frontend
-    # Get the user_id (ensure get_user_id is also an async function)
-    user_id = await get_user_id(user_name)
-    session_id = guid
+    # Clean username - remove any whitespace/encoding issues
+    user_name = user_name.strip() if user_name else ""
+    
+    try:
+        # Get the user_id and use SQL query for both platforms
+        if platform == 'fleaflicker':
+            # For Fleaflicker, we need to find the numeric user ID that corresponds to the input
+            # Check current_leagues to find the mapping from user input to numeric user ID
+            lookup_query = """
+                SELECT DISTINCT user_id
+                FROM dynastr.current_leagues 
+                WHERE platform = 'fleaflicker' 
+                AND (user_name = $1 OR user_id = $1)
+                AND league_year = $2
+                LIMIT 1
+            """
+            lookup_result = await db.fetchrow(lookup_query, user_name, league_year)
+            
+            if lookup_result:
+                user_id = lookup_result['user_id']
+            else:
+                # If not found in current_leagues, this user hasn't loaded leagues yet
+                raise HTTPException(status_code=404, detail="User not found. Please load your leagues first using the user details endpoint.")
+        else:
+            # Sleeper platform handling
+            user_id = await get_user_id(user_name)
 
-    # Assemble the SQL file path
-    sql_path = Path.cwd() / "sql" / "leagues" / "get_leagues.sql"
-    if not sql_path.exists():
-        raise HTTPException(status_code=404, detail="SQL file not found")
+        session_id = guid
 
-    # Read the SQL query and personalize it
-    async with aiofiles.open(sql_path, mode='r') as get_leagues_file:
-        get_leagues_sql = await get_leagues_file.read()
-        get_leagues_sql = (get_leagues_sql
-                        .replace("'session_id'", f"'{session_id}'")
-                        .replace("'user_id'", f"'{user_id}'")
-                        .replace("'league_year'", f"'{league_year}'"))
+        # Use the same SQL query for both platforms
+        sql_path = Path.cwd() / "sql" / "leagues" / "get_leagues.sql"
+        if not sql_path.exists():
+            raise HTTPException(status_code=404, detail="SQL file not found")
 
-    # Execute the query asynchronously and fetch results
-    results = await db.fetch(get_leagues_sql)
-    return results
+        # Read the SQL query and personalize it
+        async with aiofiles.open(sql_path, mode='r') as get_leagues_file:
+            get_leagues_sql = await get_leagues_file.read()
+            get_leagues_sql = (get_leagues_sql
+                            .replace("'session_id'", f"'{session_id}'")
+                            .replace("'user_id'", f"'{user_id}'")
+                            .replace("'league_year'", f"'{league_year}'")
+                            .replace("'platform'", f"'{platform}'"))
+
+        # Execute the query asynchronously and fetch results
+        results = await db.fetch(get_leagues_sql)
+        return results
+            
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to fetch leagues: {str(e)}")
 
 
 @app.get("/get_user")
@@ -116,6 +287,12 @@ async def get_user(user_name: str):
 
 @app.get('/ranks')
 async def ranks(platform: str, db=Depends(get_db)):
+    # Map platforms to ranking sources first
+    if platform == 'sleeper':
+        platform = 'sf'  # Sleeper uses SuperFlex rankings
+    elif platform == 'fleaflicker':
+        platform = 'sf'  # Fleaflicker also uses SuperFlex rankings
+    
     # Ensure the SQL file exists and is readable
     sql_path = Path.cwd() / "sql" / "player_values" / "ranks" / f"{platform}.sql"
     if not sql_path.exists():
@@ -166,8 +343,15 @@ async def trade_calculator(platform: str, rank_type: str, db=Depends(get_db)):
 async def league_summary(league_id: str, platform: str, rank_type: str, guid: str, roster_type: str, db=Depends(get_db), timestamp: Optional[str] = None):
     # timestamp parameter for cache busting
     session_id = guid
+    
+    # The platform parameter is the ranking source (ktc, dp, fc, sf, etc.)
+    # No need to override it based on league platform - same SQL works for all league types
+    # print removed for production
+    
     league_type = 'sf_value' if roster_type == 'Superflex' else 'one_qb_value'
-    rank_type = 'dynasty' if rank_type.lower() == 'dynasty' else 'redraft'
+    
+    # Handle rank_type conversion
+    rank_type = 'dynasty' if rank_type.lower() in ['dynasty', 'keeper'] else 'redraft'
 
     if platform in ['espn', 'cbs', 'nfl']:
         rank_source = 'contender'
@@ -195,6 +379,18 @@ async def league_summary(league_id: str, platform: str, rank_type: str, guid: st
         league_type = (
             "superflex_sf_value"
             if roster_type == "sf_value"
+            else "superflex_one_qb_value"
+        )
+
+    elif platform == 'fleaflicker':
+        league_pos_col = (
+            "superflex_sf_pos_rank"
+            if roster_type.lower() == "superflex"
+            else "superflex_one_qb_pos_rank"
+        )
+        league_type = (
+            "superflex_sf_value"
+            if roster_type.lower() == "superflex"
             else "superflex_one_qb_value"
         )
 
@@ -229,10 +425,20 @@ async def league_summary(league_id: str, platform: str, rank_type: str, guid: st
 async def league_detail(league_id: str, platform: str, rank_type: str, guid: str, roster_type: str, db=Depends(get_db), timestamp: Optional[str] = None):
     # timestamp parameter for cache busting
     session_id = guid
+    
+    # The platform parameter is the ranking source (ktc, dp, fc, sf, etc.)
+    # No need to override it based on league platform - same SQL works for all league types
+    # print removed for production
+    
     league_type = 'sf_value' if roster_type.lower() == 'superflex' else 'one_qb_value'
-    rank_type = 'dynasty' if rank_type.lower() == 'dynasty' else 'redraft'
+    
+    # Handle rank_type conversion
+    rank_type = 'dynasty' if rank_type.lower() in ['dynasty', 'keeper'] else 'redraft'
 
     if platform == 'sf':
+        league_pos_col = "superflex_sf_pos_rank" if roster_type.lower() == "superflex" else "superflex_one_qb_pos_rank"
+        league_type = "superflex_sf_value" if roster_type.lower() == "superflex" else "superflex_one_qb_value"
+    elif platform == 'fleaflicker':
         league_pos_col = "superflex_sf_pos_rank" if roster_type.lower() == "superflex" else "superflex_one_qb_pos_rank"
         league_type = "superflex_sf_value" if roster_type.lower() == "superflex" else "superflex_one_qb_value"
     elif platform == 'dd':
@@ -265,7 +471,13 @@ async def league_detail(league_id: str, platform: str, rank_type: str, guid: str
 @app.get("/trades_detail")
 @cache(expire=CACHE_EXPIRATION)
 async def trades_detail(league_id: str, platform: str, roster_type: str, league_year: str, rank_type: str, db=Depends(get_db)):
+    # Use the platform directly from frontend - this is the ranking source (ktc, dp, fc, sf, etc.)
+    # print removed for production
+    
     league_type = 'sf_value' if roster_type == 'Superflex' else 'one_qb_value'
+    
+    # Special handling for Fleaflicker Keeper leagues (they are dynasty leagues)
+    # Note: we don't need to query the league platform for trades since it's not league-specific logic
     rank_type = 'dynasty' if rank_type.lower() == 'dynasty' else 'redraft'
 
     if platform == 'sf':
@@ -306,7 +518,13 @@ async def trades_detail(league_id: str, platform: str, roster_type: str, league_
 @app.get("/trades_summary")
 @cache(expire=CACHE_EXPIRATION)
 async def trades_summary(league_id: str, platform: str, roster_type: str, league_year: str, rank_type: str, db=Depends(get_db)):
+    # Use the platform directly from frontend - this is the ranking source (ktc, dp, fc, sf, etc.)
+    # print removed for production
+    
     league_type = 'sf_value' if roster_type == 'Superflex' else 'one_qb_value'
+    
+    # Special handling for Fleaflicker Keeper leagues (they are dynasty leagues)
+    # Note: we don't need to query the league platform for trades since it's not league-specific logic
     rank_type = 'dynasty' if rank_type.lower() == 'dynasty' else 'redraft'
 
     if platform == 'sf':
@@ -335,7 +553,7 @@ async def trades_summary(league_id: str, platform: str, roster_type: str, league
 @app.get("/contender_league_summary")
 @cache(expire=CACHE_EXPIRATION)
 async def contender_league_summary(league_id: str, projection_source: str, guid: str, db=Depends(get_db)):
-    print(league_id, projection_source)
+    # print removed for production
 
     session_id = guid
 
@@ -358,7 +576,7 @@ async def contender_league_summary(league_id: str, projection_source: str, guid:
 @app.get("/contender_league_detail")
 @cache(expire=CACHE_EXPIRATION)
 async def contender_league_detail(league_id: str, projection_source: str, guid: str, db=Depends(get_db)):
-    print(league_id, projection_source)
+    # print removed for production
 
     session_id = guid
 
@@ -382,7 +600,12 @@ async def contender_league_detail(league_id: str, projection_source: str, guid: 
 @cache(expire=CACHE_EXPIRATION)
 async def best_available(league_id: str, platform: str, rank_type: str, guid: str, roster_type: str, db=Depends(get_db)):
     session_id = guid
-    rank_type = 'dynasty' if rank_type.lower() == 'dynasty' else 'redraft'
+    
+    # The platform parameter is the ranking source (ktc, dp, fc, sf, etc.)
+    # print removed for production
+    
+    # Handle rank_type conversion
+    rank_type = 'dynasty' if rank_type.lower() in ['dynasty', 'keeper'] else 'redraft'
 
     if platform == 'sf':
         league_type = "superflex_sf_value" if roster_type == "sf_value" else "superflex_one_qb_value"
@@ -448,3 +671,40 @@ async def clear_league_cache(league_id: Optional[str] = None):
     else:
         await FastAPICache.clear()
         return {"message": "All cache cleared"}
+
+
+# NEW RANKING SOURCE ROUTES
+# These routes follow the new pattern: /{rankingSource}/summary, /{rankingSource}/details, /{rankingSource}/best_available
+
+@app.get("/{ranking_source}/summary")
+@cache(expire=LEAGUE_CACHE_EXPIRATION)
+async def ranking_source_summary(ranking_source: str, league_id: str, platform: str, rank_type: str, guid: str, roster_type: str, db=Depends(get_db), timestamp: Optional[str] = None):
+    """
+    Get league summary data for a specific ranking source.
+    ranking_source: sf, ktc, dp, fc, dd
+    platform: sleeper, fleaflicker (league platform, not ranking source)
+    """
+    # Call the existing league_summary function but pass ranking_source as platform parameter
+    return await league_summary(league_id, ranking_source, rank_type, guid, roster_type, db, timestamp)
+
+@app.get("/{ranking_source}/details")
+@cache(expire=LEAGUE_CACHE_EXPIRATION)
+async def ranking_source_details(ranking_source: str, league_id: str, platform: str, rank_type: str, guid: str, roster_type: str, db=Depends(get_db), timestamp: Optional[str] = None):
+    """
+    Get league detail data for a specific ranking source.
+    ranking_source: sf, ktc, dp, fc, dd
+    platform: sleeper, fleaflicker (league platform, not ranking source)
+    """
+    # Call the existing league_detail function but pass ranking_source as platform parameter
+    return await league_detail(league_id, ranking_source, rank_type, guid, roster_type, db, timestamp)
+
+@app.get("/{ranking_source}/best_available")
+@cache(expire=CACHE_EXPIRATION)
+async def ranking_source_best_available(ranking_source: str, league_id: str, platform: str, rank_type: str, guid: str, roster_type: str, db=Depends(get_db)):
+    """
+    Get best available players for a specific ranking source.
+    ranking_source: sf, ktc, dp, fc, dd
+    platform: sleeper, fleaflicker (league platform, not ranking source)
+    """
+    # Call the existing best_available function but pass ranking_source as platform parameter
+    return await best_available(league_id, ranking_source, rank_type, guid, roster_type, db)

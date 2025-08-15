@@ -1,10 +1,14 @@
 from pydantic import BaseModel
+from typing import Optional, List
 
 
 class UserDataModel(BaseModel):
     user_name: str
     league_year: str
     guid: str
+    platform: Optional[str] = "sleeper"  # Default to sleeper for backward compatibility
+    timestamp: Optional[str] = None  # For cache busting
+    league_ids: Optional[List[str]] = None  # For Fleaflicker league IDs
 
 
 class LeagueDataModel(BaseModel):
@@ -16,6 +20,8 @@ class RosterDataModel(BaseModel):
     user_id: str
     guid: str
     league_year: str
+    platform: Optional[str] = None  # Will be detected from database if not provided
+    timestamp: Optional[str] = None  # For cache busting
 
 
 class RanksDataModel(BaseModel):

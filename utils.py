@@ -377,6 +377,26 @@ async def insert_current_leagues(db, user_data: UserDataModel):
                     league_year = excluded.league_year,
                     previous_league_id = excluded.previous_league_id
                 """, values)
+            
+            # Save the username to user_searches table for future reference
+            # This allows users to see their previously searched usernames
+            await db.execute("""
+                INSERT INTO dynastr.user_searches (
+                    user_identifier, 
+                    platform, 
+                    display_name,
+                    user_id,
+                    league_year,
+                    last_used
+                )
+                VALUES ($1, $2, $3, $4, $5, NOW())
+                ON CONFLICT (user_identifier, platform) 
+                DO UPDATE SET 
+                    last_used = NOW(),
+                    league_year = EXCLUDED.league_year,
+                    user_id = EXCLUDED.user_id
+            """, user_name, 'sleeper', user_name, user_id, league_year)
+            
     except Exception as e:
         print(f"Failed to update current leagues: {e}")
         traceback.print_exc() 
