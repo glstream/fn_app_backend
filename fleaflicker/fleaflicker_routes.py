@@ -10,7 +10,7 @@ from datetime import datetime
 
 from db import get_db
 from superflex_models import UserDataModel, LeagueDataModel, RosterDataModel
-from fleaflicker_utils import (
+from .fleaflicker_utils import (
     get_fleaflicker_user_id,
     get_fleaflicker_managers,
     insert_fleaflicker_teams,
@@ -18,7 +18,7 @@ from fleaflicker_utils import (
     insert_fleaflicker_transactions,
     insert_fleaflicker_league_rosters
 )
-from fleaflicker_client import fleaflicker_client
+from .fleaflicker_client import fleaflicker_client
 from fastapi_cache.decorator import cache
 from utils import CACHE_EXPIRATION, LEAGUE_CACHE_EXPIRATION, SHORT_CACHE_EXPIRATION
 
@@ -43,14 +43,14 @@ async def insert_current_leagues_fleaflicker(db, user_data: UserDataModel):
     # Check if user_name is email or numeric ID
     if '@' in user_name:
         # Email-based lookup
-        from fleaflicker_utils import get_fleaflicker_user_leagues_by_email
+        from .fleaflicker_utils import get_fleaflicker_user_leagues_by_email
         user_id, leagues = await get_fleaflicker_user_leagues_by_email(user_name, league_year, timestamp=timestamp)
         if not user_id:
             raise HTTPException(status_code=404, detail="No user found with that email address")
     else:
         # Numeric ID lookup (existing behavior)
         user_id = await get_fleaflicker_user_id(user_name)
-        from fleaflicker_utils import get_fleaflicker_user_leagues
+        from .fleaflicker_utils import get_fleaflicker_user_leagues
         leagues = await get_fleaflicker_user_leagues(user_name, league_year, timestamp=timestamp)
     
     entry_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f%z")

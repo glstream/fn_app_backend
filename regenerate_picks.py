@@ -7,7 +7,7 @@ import asyncio
 import asyncpg
 import os
 from dotenv import load_dotenv
-from fleaflicker_utils import extract_all_fleaflicker_draft_picks, insert_fleaflicker_draft_picks_data
+from fleaflicker.fleaflicker_utils import extract_all_fleaflicker_draft_picks, insert_fleaflicker_draft_picks_data
 
 load_dotenv()
 

@@ -5,7 +5,7 @@ Test the fixed traded picks extraction
 
 import asyncio
 import asyncpg
-from fleaflicker_utils import extract_all_fleaflicker_draft_picks, insert_fleaflicker_draft_picks_data
+from fleaflicker.fleaflicker_utils import extract_all_fleaflicker_draft_picks, insert_fleaflicker_draft_picks_data
 
 async def test_fixed_extraction():
     league_id = '349505'

@@ -8,7 +8,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from fleaflicker_client import fleaflicker_client
+from fleaflicker.fleaflicker_client import fleaflicker_client
 
 async def test_fleaflicker_picks():
     league_id = '349505'

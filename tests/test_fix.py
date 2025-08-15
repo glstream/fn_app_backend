@@ -7,7 +7,7 @@ import os
 # Add current directory to Python path
 sys.path.insert(0, '/Users/glstream/Documents/project-folder/fantasy_navigator_services/fn_app_backend')
 
-from fleaflicker_utils import update_fleaflicker_league_data
+from fleaflicker.fleaflicker_utils import update_fleaflicker_league_data
 
 async def test_fix():
     """Test the draft pick naming fix"""

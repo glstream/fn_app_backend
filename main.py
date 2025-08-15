@@ -19,14 +19,14 @@ from db import init_db_pool, close_db, get_db
 from superflex_models import UserDataModel, LeagueDataModel, RosterDataModel, RanksDataModel
 from utils import (get_user_id, insert_current_leagues, player_manager_rosters, insert_ranks_summary,
                    close_http_session)  # Import close_http_session
-from fleaflicker_utils import (
+from fleaflicker.fleaflicker_utils import (
     get_fleaflicker_user_id, get_fleaflicker_user_leagues,
     player_manager_rosters_fleaflicker, insert_fleaflicker_teams,
     insert_fleaflicker_scoreboards, insert_fleaflicker_transactions,
     insert_fleaflicker_ranks_summary
 )
-from fleaflicker_client import fleaflicker_client
-from fleaflicker_routes import router as fleaflicker_router, insert_current_leagues_fleaflicker
+from fleaflicker.fleaflicker_client import fleaflicker_client
+from fleaflicker.fleaflicker_routes import router as fleaflicker_router, insert_current_leagues_fleaflicker
 
 # Load environment variables from .env file
 load_dotenv()

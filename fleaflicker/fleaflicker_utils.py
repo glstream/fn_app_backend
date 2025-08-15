@@ -7,7 +7,7 @@ import asyncio
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 # from fastapi_cache.decorator import cache  # Disabled temporarily
-from fleaflicker_client import fleaflicker_client
+from .fleaflicker_client import fleaflicker_client
 from utils import CACHE_EXPIRATION, LEAGUE_CACHE_EXPIRATION, SHORT_CACHE_EXPIRATION
 
 
