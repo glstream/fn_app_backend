@@ -147,10 +147,10 @@ async def user_details(user_data: UserDataModel, db=Depends(get_db)):
 
 @app.post("/roster")
 async def roster(roster_data: RosterDataModel, db=Depends(get_db)):
-    print('attempt rosters')
+    # print removed for production
     # Check platform from roster data or database
     platform = getattr(roster_data, 'platform', None)
-    print(f"DEBUG: platform from roster_data: {platform}")
+    # print removed for production
     
     if not platform:
         # Query the platform from current_leagues table
@@ -158,32 +158,31 @@ async def roster(roster_data: RosterDataModel, db=Depends(get_db)):
                    WHERE session_id = $1 AND league_id = $2 LIMIT 1"""
         result = await db.fetchrow(query, roster_data.guid, roster_data.league_id)
         platform = result['platform'] if result else 'sleeper'
-        print(f"DEBUG: platform from database: {platform}")
+        # print removed for production
     
-    print(f"DEBUG: Using platform: {platform}")
+    # print removed for production
     if platform == 'fleaflicker':
-        print("DEBUG: Calling Fleaflicker roster function")
+        # print removed for production
         result = await player_manager_rosters_fleaflicker(db, roster_data)
         
         # After loading rosters, calculate and save rankings
         try:
-            print("DEBUG: Calculating Fleaflicker rankings...")
+            # print removed for production
             ranks_result = await insert_fleaflicker_ranks_summary(db, roster_data.guid, roster_data.league_id)
-            print(f"DEBUG: Rankings result: {ranks_result}")
+            # print removed for production
         except Exception as e:
-            print(f"WARNING: Failed to calculate Fleaflicker rankings: {e}")
             # Don't fail the roster load if rankings fail
+            pass
         
         return result
     else:
-        print("DEBUG: Calling Sleeper roster function")
+        # print removed for production
         return await player_manager_rosters(db, roster_data)
 
 
 @app.post("/ranks_summary")
 async def ranks_summary(ranks_data: RanksDataModel, db=Depends(get_db)):
-    print('attempt ranks summary')
-    print(ranks_data)
+    # print removed for production
     
     # Map platform names to ranking sources if needed
     if ranks_data.rank_source == 'fleaflicker':
@@ -274,7 +273,6 @@ async def leagues(league_year: str, user_name: str, guid: str, platform: str = "
         return results
             
     except Exception as e:
-        print(f"Error in leagues endpoint: {e}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to fetch leagues: {str(e)}")
@@ -348,7 +346,7 @@ async def league_summary(league_id: str, platform: str, rank_type: str, guid: st
     
     # The platform parameter is the ranking source (ktc, dp, fc, sf, etc.)
     # No need to override it based on league platform - same SQL works for all league types
-    print(f"DEBUG: Frontend sent ranking_source={platform}")
+    # print removed for production
     
     league_type = 'sf_value' if roster_type == 'Superflex' else 'one_qb_value'
     
@@ -430,7 +428,7 @@ async def league_detail(league_id: str, platform: str, rank_type: str, guid: str
     
     # The platform parameter is the ranking source (ktc, dp, fc, sf, etc.)
     # No need to override it based on league platform - same SQL works for all league types
-    print(f"DEBUG: Frontend sent ranking_source={platform}")
+    # print removed for production
     
     league_type = 'sf_value' if roster_type.lower() == 'superflex' else 'one_qb_value'
     
@@ -474,7 +472,7 @@ async def league_detail(league_id: str, platform: str, rank_type: str, guid: str
 @cache(expire=CACHE_EXPIRATION)
 async def trades_detail(league_id: str, platform: str, roster_type: str, league_year: str, rank_type: str, db=Depends(get_db)):
     # Use the platform directly from frontend - this is the ranking source (ktc, dp, fc, sf, etc.)
-    print(f"DEBUG: trades_detail - Frontend sent platform={platform}")
+    # print removed for production
     
     league_type = 'sf_value' if roster_type == 'Superflex' else 'one_qb_value'
     
@@ -521,7 +519,7 @@ async def trades_detail(league_id: str, platform: str, roster_type: str, league_
 @cache(expire=CACHE_EXPIRATION)
 async def trades_summary(league_id: str, platform: str, roster_type: str, league_year: str, rank_type: str, db=Depends(get_db)):
     # Use the platform directly from frontend - this is the ranking source (ktc, dp, fc, sf, etc.)
-    print(f"DEBUG: trades_summary - Frontend sent platform={platform}")
+    # print removed for production
     
     league_type = 'sf_value' if roster_type == 'Superflex' else 'one_qb_value'
     
@@ -555,7 +553,7 @@ async def trades_summary(league_id: str, platform: str, roster_type: str, league
 @app.get("/contender_league_summary")
 @cache(expire=CACHE_EXPIRATION)
 async def contender_league_summary(league_id: str, projection_source: str, guid: str, db=Depends(get_db)):
-    print(league_id, projection_source)
+    # print removed for production
 
     session_id = guid
 
@@ -578,7 +576,7 @@ async def contender_league_summary(league_id: str, projection_source: str, guid:
 @app.get("/contender_league_detail")
 @cache(expire=CACHE_EXPIRATION)
 async def contender_league_detail(league_id: str, projection_source: str, guid: str, db=Depends(get_db)):
-    print(league_id, projection_source)
+    # print removed for production
 
     session_id = guid
 
@@ -604,7 +602,7 @@ async def best_available(league_id: str, platform: str, rank_type: str, guid: st
     session_id = guid
     
     # The platform parameter is the ranking source (ktc, dp, fc, sf, etc.)
-    print(f"DEBUG: Frontend sent ranking_source={platform}")
+    # print removed for production
     
     # Handle rank_type conversion
     rank_type = 'dynasty' if rank_type.lower() in ['dynasty', 'keeper'] else 'redraft'

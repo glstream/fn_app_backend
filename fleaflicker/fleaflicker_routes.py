@@ -45,13 +45,15 @@ async def insert_current_leagues_fleaflicker(db, user_data: UserDataModel):
         # Email-based lookup
         from .fleaflicker_utils import get_fleaflicker_user_leagues_by_email
         user_id, leagues = await get_fleaflicker_user_leagues_by_email(user_name, league_year, timestamp=timestamp)
-        if not user_id:
-            raise HTTPException(status_code=404, detail="No user found with that email address")
+        if not user_id or not leagues:
+            return {"status": "success", "leagues_inserted": 0, "message": "No leagues found for this email address"}
     else:
         # Numeric ID lookup (existing behavior)
         user_id = await get_fleaflicker_user_id(user_name)
         from .fleaflicker_utils import get_fleaflicker_user_leagues
         leagues = await get_fleaflicker_user_leagues(user_name, league_year, timestamp=timestamp)
+        if not leagues:
+            return {"status": "success", "leagues_inserted": 0, "message": "No leagues found for this username"}
     
     entry_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f%z")
     
@@ -79,11 +81,11 @@ async def insert_current_leagues_fleaflicker(db, user_data: UserDataModel):
                         if '@' in user_name and owner_email:
                             if owner_email.lower() == user_name.lower():
                                 fleaflicker_user_id = str(owner_id)
-                                print(f"DEBUG: Found user by email match - ID: {fleaflicker_user_id}")
+                                # print removed for production - DEBUG: Found user by email match - ID: {fleaflicker_user_id}")
                                 break
                         elif owner_display == user_name:
                             fleaflicker_user_id = str(owner_id)
-                            print(f"DEBUG: Found user by display name match - ID: {fleaflicker_user_id}")
+                            # print removed for production - DEBUG: Found user by display name match - ID: {fleaflicker_user_id}")
                             break
                     if fleaflicker_user_id:
                         break
@@ -200,10 +202,11 @@ async def insert_current_leagues_fleaflicker(db, user_data: UserDataModel):
                                 if owner.get("email", "").lower() == user_name.lower():
                                     display_name = owner.get("displayName", user_name)
                                     user_identifier = display_name  # Use username, not email
-                                    print(f"DEBUG: Using username '{display_name}' instead of email for storage")
+                                    # print removed for production - DEBUG: Using username '{display_name}' instead of email for storage")
                                     break
                 except Exception as e:
-                    print(f"DEBUG: Could not extract username, using original identifier: {e}")
+                    # print removed for production - DEBUG: Could not extract username, using original identifier: {e}")
+                    pass
             
             await db.execute("""
                 INSERT INTO dynastr.user_searches (

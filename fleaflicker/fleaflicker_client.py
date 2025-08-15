@@ -95,11 +95,11 @@ class FleaflickerClient:
         if email:
             params["email"] = email
             
-        print(f"DEBUG: Fleaflicker API call params: {params}")
+        # print removed for production - DEBUG: Fleaflicker API call params: {params}")
             
         try:
             response = await self._make_api_call("FetchUserLeagues", params)
-            print(f"DEBUG: Fleaflicker API raw response: {response}")
+            # print removed for production - DEBUG: Fleaflicker API raw response: {response}")
             return response.get("leagues", [])
         except Exception as e:
             print(f"Error fetching user leagues for user {user_id}: {e}")
