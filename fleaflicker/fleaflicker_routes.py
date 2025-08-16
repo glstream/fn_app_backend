@@ -37,22 +37,37 @@ async def insert_current_leagues_fleaflicker(db, user_data: UserDataModel):
     league_year = user_data.league_year
     session_id = user_data.guid
     
+    print(f"DEBUG insert_current_leagues_fleaflicker: Starting for user {user_name}, year {league_year}, session {session_id}")
+    
     # Get timestamp for cache busting if provided
     timestamp = getattr(user_data, 'timestamp', None)
     
     # Check if user_name is email or numeric ID
     if '@' in user_name:
         # Email-based lookup
+        print(f"DEBUG: Email-based lookup for {user_name}")
         from .fleaflicker_utils import get_fleaflicker_user_leagues_by_email
         user_id, leagues = await get_fleaflicker_user_leagues_by_email(user_name, league_year, timestamp=timestamp)
-        if not user_id or not leagues:
+        print(f"DEBUG: Email lookup returned - user_id: {user_id}, leagues count: {len(leagues) if leagues else 0}")
+        
+        # If we have leagues but no user_id, use the email as the user_id temporarily
+        # We'll get the actual user_id from the standings API later
+        if leagues and not user_id:
+            print(f"DEBUG: Found leagues but no user_id, using email as temporary ID")
+            user_id = user_name  # Use email as a temporary identifier
+        
+        if not leagues:
+            print(f"DEBUG: No leagues found for email {user_name}")
             return {"status": "success", "leagues_inserted": 0, "message": "No leagues found for this email address"}
     else:
         # Numeric ID lookup (existing behavior)
+        print(f"DEBUG: Numeric ID lookup for {user_name}")
         user_id = await get_fleaflicker_user_id(user_name)
         from .fleaflicker_utils import get_fleaflicker_user_leagues
         leagues = await get_fleaflicker_user_leagues(user_name, league_year, timestamp=timestamp)
+        print(f"DEBUG: Numeric lookup returned - user_id: {user_id}, leagues count: {len(leagues) if leagues else 0}")
         if not leagues:
+            print(f"DEBUG: No leagues found for username {user_name}")
             return {"status": "success", "leagues_inserted": 0, "message": "No leagues found for this username"}
     
     entry_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f%z")
@@ -94,6 +109,7 @@ async def insert_current_leagues_fleaflicker(db, user_data: UserDataModel):
             
             # If we found the Fleaflicker user ID, use it; otherwise fallback to original user_id
             actual_user_id = fleaflicker_user_id if fleaflicker_user_id else user_id
+            print(f"DEBUG: League {league_id} - fleaflicker_user_id: {fleaflicker_user_id}, original user_id: {user_id}, actual_user_id: {actual_user_id}")
             
             # Create enriched league tuple with the correct user ID
             enriched_league = list(league)  # Convert to list for modification
@@ -225,6 +241,7 @@ async def insert_current_leagues_fleaflicker(db, user_data: UserDataModel):
                     user_id = EXCLUDED.user_id
             """, user_identifier, 'fleaflicker', display_name, search_user_id, league_year)
             
+        print(f"DEBUG: Successfully inserted {len(values)} Fleaflicker leagues for session {session_id}")
         return {"status": "success", "leagues_inserted": len(values)}
         
     except Exception as e:

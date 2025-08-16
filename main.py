@@ -137,9 +137,14 @@ async def user_details(user_data: UserDataModel, db=Depends(get_db)):
     # Check if platform is specified, default to sleeper
     platform = getattr(user_data, 'platform', 'sleeper')
     
+    print(f"DEBUG /user_details: Received request - platform: {platform}, user: {user_data.user_name}, year: {user_data.league_year}")
+    
     if platform == 'fleaflicker':
         # Handle Fleaflicker league insertion
-        return await insert_current_leagues_fleaflicker(db, user_data)
+        print(f"DEBUG: Calling insert_current_leagues_fleaflicker")
+        result = await insert_current_leagues_fleaflicker(db, user_data)
+        print(f"DEBUG: insert_current_leagues_fleaflicker returned: {result}")
+        return result
     else:
         # Default Sleeper behavior
         return await insert_current_leagues(db, user_data)
@@ -233,21 +238,38 @@ async def leagues(league_year: str, user_name: str, guid: str, platform: str = "
         if platform == 'fleaflicker':
             # For Fleaflicker, we need to find the numeric user ID that corresponds to the input
             # Check current_leagues to find the mapping from user input to numeric user ID
+            # Use case-insensitive comparison for email addresses
+            print(f"DEBUG: Looking up Fleaflicker user - username: {user_name}, year: {league_year}")
+            
             lookup_query = """
-                SELECT DISTINCT user_id
+                SELECT DISTINCT user_id, user_name
                 FROM dynastr.current_leagues 
                 WHERE platform = 'fleaflicker' 
-                AND (user_name = $1 OR user_id = $1)
+                AND session_id = $1
                 AND league_year = $2
                 LIMIT 1
             """
-            lookup_result = await db.fetchrow(lookup_query, user_name, league_year)
+            lookup_result = await db.fetchrow(lookup_query, guid, league_year)
             
             if lookup_result:
                 user_id = lookup_result['user_id']
+                print(f"DEBUG: Found Fleaflicker user - ID: {user_id}, stored username: {lookup_result['user_name']}")
             else:
-                # If not found in current_leagues, this user hasn't loaded leagues yet
-                raise HTTPException(status_code=404, detail="User not found. Please load your leagues first using the user details endpoint.")
+                print(f"DEBUG: No Fleaflicker user found for {user_name} in year {league_year}")
+                # Also check what's actually in the database
+                check_query = """
+                    SELECT DISTINCT user_name, user_id, league_year
+                    FROM dynastr.current_leagues 
+                    WHERE platform = 'fleaflicker'
+                    AND session_id = $1
+                    LIMIT 5
+                """
+                check_results = await db.fetch(check_query, guid)
+                print(f"DEBUG: Found {len(check_results)} Fleaflicker entries for session {guid}")
+                for row in check_results:
+                    print(f"  - Username: {row['user_name']}, ID: {row['user_id']}, Year: {row['league_year']}")
+                # Return empty array instead of error for better UX
+                return []
         else:
             # Sleeper platform handling
             user_id = await get_user_id(user_name)
@@ -269,7 +291,22 @@ async def leagues(league_year: str, user_name: str, guid: str, platform: str = "
                             .replace("'platform'", f"'{platform}'"))
 
         # Execute the query asynchronously and fetch results
+        print(f"DEBUG: Executing SQL query for session_id={session_id}, user_id={user_id}, league_year={league_year}, platform={platform}")
         results = await db.fetch(get_leagues_sql)
+        print(f"DEBUG: Query returned {len(results)} results")
+        if len(results) == 0:
+            # Debug: Check what's actually in the database
+            check_query = """
+                SELECT session_id, user_id, user_name, league_id, league_year, platform
+                FROM dynastr.current_leagues
+                WHERE platform = 'fleaflicker'
+                AND session_id = $1
+                LIMIT 5
+            """
+            check_results = await db.fetch(check_query, session_id)
+            print(f"DEBUG: Direct query found {len(check_results)} Fleaflicker leagues for session {session_id}")
+            for row in check_results:
+                print(f"  - Session: {row['session_id']}, User ID: {row['user_id']}, Username: {row['user_name']}, Year: {row['league_year']}")
         return results
             
     except Exception as e:
