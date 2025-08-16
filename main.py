@@ -152,10 +152,10 @@ async def user_details(user_data: UserDataModel, db=Depends(get_db)):
 
 @app.post("/roster")
 async def roster(roster_data: RosterDataModel, db=Depends(get_db)):
-    # print removed for production
+    print(f"DEBUG /roster: Received request - league_id: {roster_data.league_id}, guid: {roster_data.guid}")
     # Check platform from roster data or database
     platform = getattr(roster_data, 'platform', None)
-    # print removed for production
+    print(f"DEBUG /roster: Platform from request: {platform}")
     
     if not platform:
         # Query the platform from current_leagues table
@@ -163,12 +163,13 @@ async def roster(roster_data: RosterDataModel, db=Depends(get_db)):
                    WHERE session_id = $1 AND league_id = $2 LIMIT 1"""
         result = await db.fetchrow(query, roster_data.guid, roster_data.league_id)
         platform = result['platform'] if result else 'sleeper'
-        # print removed for production
+        print(f"DEBUG /roster: Platform from database: {platform}")
     
-    # print removed for production
+    print(f"DEBUG /roster: Using platform: {platform}")
     if platform == 'fleaflicker':
-        # print removed for production
+        print(f"DEBUG /roster: Calling player_manager_rosters_fleaflicker")
         result = await player_manager_rosters_fleaflicker(db, roster_data)
+        print(f"DEBUG /roster: Fleaflicker roster result - players inserted: {result.get('players_inserted', 0) if isinstance(result, dict) else 'unknown'}")
         
         # After loading rosters, calculate and save rankings
         try:
