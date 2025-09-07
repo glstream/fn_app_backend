@@ -102,28 +102,50 @@ async def get_user_name(user_id: str):
 @cache(expire=LEAGUE_CACHE_EXPIRATION)
 async def get_user_leagues(user_name: str, league_year: str, timestamp: str = None) -> list:
     # timestamp parameter for cache busting - not used in logic but affects cache key
-    owner_id = await get_user_id(user_name)  # Ensure this call is awaited
-    leagues_json = await make_api_call(
-        f"https://api.sleeper.app/v1/user/{owner_id}/leagues/nfl/{league_year}"
-    )  # Ensure this call is awaited
+    try:
+        owner_id = await get_user_id(user_name)  # Ensure this call is awaited
+        leagues_json = await make_api_call(
+            f"https://api.sleeper.app/v1/user/{owner_id}/leagues/nfl/{league_year}"
+        )  # Ensure this call is awaited
+        
+        # Check if leagues_json is None or not iterable
+        if leagues_json is None:
+            print(f"WARNING: API returned None for user {user_name} (ID: {owner_id}) leagues")
+            return []
+        
+        if not hasattr(leagues_json, '__iter__'):
+            print(f"WARNING: API returned non-iterable for user {user_name} (ID: {owner_id}): {type(leagues_json)}")
+            return []
+            
+    except Exception as e:
+        print(f"ERROR fetching leagues for user {user_name}: {e}")
+        print(f"Traceback: {traceback.format_exc()}")
+        return []
 
     leagues = []
     for league in leagues_json:
-        qbs = len([i for i in league["roster_positions"] if i == "QB"])
-        rbs = len([i for i in league["roster_positions"] if i == "RB"])
-        wrs = len([i for i in league["roster_positions"] if i == "WR"])
-        tes = len([i for i in league["roster_positions"] if i == "TE"])
-        flexes = len([i for i in league["roster_positions"] if i == "FLEX"])
-        super_flexes = len([i for i in league["roster_positions"] if i == "SUPER_FLEX"])
-        rec_flexes = len([i for i in league["roster_positions"] if i == "REC_FLEX"])
+        # Skip leagues with missing roster_positions
+        roster_positions = league.get("roster_positions")
+        if roster_positions is None:
+            print(f"WARNING: League {league.get('league_id', 'unknown')} ({league.get('name', 'unnamed')}) has null roster_positions, skipping")
+            continue
+            
+        # Count position slots safely
+        qbs = len([i for i in roster_positions if i == "QB"])
+        rbs = len([i for i in roster_positions if i == "RB"])
+        wrs = len([i for i in roster_positions if i == "WR"])
+        tes = len([i for i in roster_positions if i == "TE"])
+        flexes = len([i for i in roster_positions if i == "FLEX"])
+        super_flexes = len([i for i in roster_positions if i == "SUPER_FLEX"])
+        rec_flexes = len([i for i in roster_positions if i == "REC_FLEX"])
         starters = sum([qbs, rbs, wrs, tes, flexes, super_flexes, rec_flexes])
 
         leagues.append(
             (
-                league["name"],
-                league["league_id"],
+                league.get("name", "Unnamed League"),
+                league.get("league_id", ""),
                 league.get("avatar", ""),
-                league["total_rosters"],
+                league.get("total_rosters", 0),
                 qbs,
                 rbs,
                 wrs,
@@ -131,10 +153,10 @@ async def get_user_leagues(user_name: str, league_year: str, timestamp: str = No
                 flexes,
                 super_flexes,
                 starters,
-                len(league["roster_positions"]),
-                league["sport"],
+                len(roster_positions),  # Use the validated roster_positions variable
+                league.get("sport", "nfl"),
                 rec_flexes,
-                league["settings"]["type"],
+                league.get("settings", {}).get("type", 0),
                 league_year,
                 league.get("previous_league_id", None),
             )
@@ -397,10 +419,22 @@ async def insert_current_leagues(db, user_data: UserDataModel):
                     user_id = EXCLUDED.user_id
             """, user_name, 'sleeper', user_name, user_id, league_year)
             
+        # Return success response with league count
+        return {
+            "status": "success",
+            "user_id": user_id,
+            "user_name": user_name,
+            "leagues_loaded": len(leagues),
+            "session_id": session_id
+        }
+            
     except Exception as e:
         print(f"Failed to update current leagues: {e}")
         traceback.print_exc() 
-        raise
+        return {
+            "status": "error",
+            "message": str(e)
+        }
 
 
 async def insert_managers(db, managers: list):
