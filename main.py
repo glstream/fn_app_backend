@@ -27,6 +27,8 @@ from fleaflicker.fleaflicker_utils import (
 )
 from fleaflicker.fleaflicker_client import fleaflicker_client
 from fleaflicker.fleaflicker_routes import router as fleaflicker_router, insert_current_leagues_fleaflicker
+from mfl.mfl_routes import router as mfl_router, insert_current_leagues_mfl
+from mfl.mfl_client import mfl_client
 
 # Load environment variables from .env file
 load_dotenv()
@@ -39,6 +41,8 @@ app = FastAPI()
 
 # Add Fleaflicker router
 app.include_router(fleaflicker_router)
+# Add MFL router
+app.include_router(mfl_router)
 
 # Add GZipMiddleware first, it should be one of the first middlewares
 app.add_middleware(GZipMiddleware, minimum_size=1000)  # Compress responses larger than 1KB
@@ -145,6 +149,16 @@ async def user_details(user_data: UserDataModel, db=Depends(get_db)):
         return await insert_current_leagues(db, user_data)
 
 
+@app.post("/mfl_league")
+async def mfl_league_direct(league_data: LeagueDataModel, db=Depends(get_db)):
+    """
+    Direct MFL league access endpoint when user provides league ID.
+    This bypasses the username flow and goes straight to league detail.
+    """
+    from mfl_api_endpoints import handle_mfl_league_direct
+    return await handle_mfl_league_direct(league_data, db)
+
+
 @app.post("/roster")
 async def roster(roster_data: RosterDataModel, db=Depends(get_db)):
     print('attempt rosters')
@@ -172,6 +186,30 @@ async def roster(roster_data: RosterDataModel, db=Depends(get_db)):
             print(f"DEBUG: Rankings result: {ranks_result}")
         except Exception as e:
             print(f"WARNING: Failed to calculate Fleaflicker rankings: {e}")
+            # Don't fail the roster load if rankings fail
+    elif platform == 'mfl':
+        print("DEBUG: Calling MFL roster function")
+        from mfl.mfl_utils import insert_mfl_league_rosters, get_mfl_power_rankings
+        
+        # Insert rosters
+        result = await insert_mfl_league_rosters(
+            db, 
+            roster_data.guid, 
+            roster_data.user_id, 
+            roster_data.league_id,
+            roster_data.league_year
+        )
+        
+        # Calculate rankings
+        try:
+            print("DEBUG: Calculating MFL rankings...")
+            rankings = await get_mfl_power_rankings(db, roster_data.guid, roster_data.league_id)
+            
+            # Insert rankings into ranks_summary table
+            await insert_ranks_summary(db, roster_data)
+            print(f"DEBUG: MFL Rankings calculated: {len(rankings)} teams")
+        except Exception as e:
+            print(f"WARNING: Failed to calculate MFL rankings: {e}")
             # Don't fail the roster load if rankings fail
         
         return result
