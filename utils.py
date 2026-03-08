@@ -101,10 +101,25 @@ async def get_user_name(user_id: str):
 
 async def get_user_leagues(user_name: str, league_year: str, timestamp: str = None) -> list:
     # timestamp parameter for cache busting - not used in logic but affects cache key
-    owner_id = await get_user_id(user_name)  # Ensure this call is awaited
-    leagues_json = await make_api_call(
-        f"https://api.sleeper.app/v1/user/{owner_id}/leagues/nfl/{league_year}"
-    )  # Ensure this call is awaited
+    try:
+        owner_id = await get_user_id(user_name)  # Ensure this call is awaited
+        leagues_json = await make_api_call(
+            f"https://api.sleeper.app/v1/user/{owner_id}/leagues/nfl/{league_year}"
+        )  # Ensure this call is awaited
+        
+        # Check if leagues_json is None or not iterable
+        if leagues_json is None:
+            print(f"WARNING: API returned None for user {user_name} (ID: {owner_id}) leagues")
+            return []
+        
+        if not hasattr(leagues_json, '__iter__'):
+            print(f"WARNING: API returned non-iterable for user {user_name} (ID: {owner_id}): {type(leagues_json)}")
+            return []
+            
+    except Exception as e:
+        print(f"ERROR fetching leagues for user {user_name}: {e}")
+        print(f"Traceback: {traceback.format_exc()}")
+        return []
 
     leagues = []
     for league in leagues_json:
@@ -407,10 +422,22 @@ async def insert_current_leagues(db, user_data: UserDataModel):
                     user_id = EXCLUDED.user_id
             """, user_name, 'sleeper', user_name, user_id, league_year)
             
+        # Return success response with league count
+        return {
+            "status": "success",
+            "user_id": user_id,
+            "user_name": user_name,
+            "leagues_loaded": len(leagues),
+            "session_id": session_id
+        }
+            
     except Exception as e:
         print(f"Failed to update current leagues: {e}")
         traceback.print_exc() 
-        raise
+        return {
+            "status": "error",
+            "message": str(e)
+        }
 
 
 async def insert_managers(db, managers: list):
