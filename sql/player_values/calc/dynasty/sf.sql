@@ -44,7 +44,8 @@ FROM (
   LEFT JOIN dynastr.players p ON sf.player_full_name = p.full_name
   LEFT JOIN (select * from dynastr.ktc_player_ranks where rank_type = 'dynasty') ktc on sf.ktc_player_id = ktc.ktc_player_id
   WHERE
-   sf.player_full_name NOT LIKE '%2024%'
+   sf.player_full_name NOT LIKE '%2025%'
+    AND sf.player_full_name NOT LIKE '%2024%'
     AND sf.player_full_name NOT LIKE '%2023%'
     AND sf.player_full_name NOT LIKE '%2022%'
     AND sf.player_full_name NOT LIKE '%2021%'

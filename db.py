@@ -2,6 +2,7 @@ import asyncpg
 import os
 import asyncio
 import logging
+import time
 from fastapi import HTTPException 
 
 pool = None
@@ -33,14 +34,17 @@ async def init_db_pool():
 
 async def get_db():
     global pool
+    start_time = time.time()
     try:
         if pool is None:
             async with pool_lock:
                 if pool is None:
                     await init_db_pool()
         async with pool.acquire() as connection:
+            # Removed Datadog metrics - no longer needed
             yield connection
     except Exception as e:
+        # Removed Datadog metrics - no longer needed
         logger.error(f"Failed to acquire database connection: {e}")
         raise HTTPException(status_code=500, detail="Database connection error")
 

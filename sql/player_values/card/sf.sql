@@ -17,7 +17,7 @@ from dynastr.sf_player_ranks_hist
 where 1=1
 and ktc_player_id = 'player_id'
 and rank_type = 'dynasty'
-and insert_date::date between '2025-01-01' and '2025-12-31'
+and insert_date::date >= '2024-01-01'
 group by
 insert_date::date
 ,ktc_player_id

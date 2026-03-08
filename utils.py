@@ -99,7 +99,6 @@ async def get_user_name(user_id: str):
         return None, None
 
 
-@cache(expire=LEAGUE_CACHE_EXPIRATION)
 async def get_user_leagues(user_name: str, league_year: str, timestamp: str = None) -> list:
     # timestamp parameter for cache busting - not used in logic but affects cache key
     owner_id = await get_user_id(user_name)  # Ensure this call is awaited
@@ -109,36 +108,47 @@ async def get_user_leagues(user_name: str, league_year: str, timestamp: str = No
 
     leagues = []
     for league in leagues_json:
-        qbs = len([i for i in league["roster_positions"] if i == "QB"])
-        rbs = len([i for i in league["roster_positions"] if i == "RB"])
-        wrs = len([i for i in league["roster_positions"] if i == "WR"])
-        tes = len([i for i in league["roster_positions"] if i == "TE"])
-        flexes = len([i for i in league["roster_positions"] if i == "FLEX"])
-        super_flexes = len([i for i in league["roster_positions"] if i == "SUPER_FLEX"])
-        rec_flexes = len([i for i in league["roster_positions"] if i == "REC_FLEX"])
-        starters = sum([qbs, rbs, wrs, tes, flexes, super_flexes, rec_flexes])
+        try:
+            qbs = len([i for i in league["roster_positions"] if i == "QB"])
+            rbs = len([i for i in league["roster_positions"] if i == "RB"])
+            wrs = len([i for i in league["roster_positions"] if i == "WR"])
+            tes = len([i for i in league["roster_positions"] if i == "TE"])
+            flexes = len([i for i in league["roster_positions"] if i == "FLEX"])
+            super_flexes = len([i for i in league["roster_positions"] if i == "SUPER_FLEX"])
+            rec_flexes = len([i for i in league["roster_positions"] if i == "REC_FLEX"])
+            starters = sum([qbs, rbs, wrs, tes, flexes, super_flexes, rec_flexes])
 
-        leagues.append(
-            (
-                league["name"],
-                league["league_id"],
-                league.get("avatar", ""),
-                league["total_rosters"],
-                qbs,
-                rbs,
-                wrs,
-                tes,
-                flexes,
-                super_flexes,
-                starters,
-                len(league["roster_positions"]),
-                league["sport"],
-                rec_flexes,
-                league["settings"]["type"],
-                league_year,
-                league.get("previous_league_id", None),
+            # Handle potential missing or malformed league settings
+            league_type = 2  # Default to Dynasty (type 2) if settings are missing
+            if "settings" in league and "type" in league["settings"]:
+                league_type = league["settings"]["type"]
+            
+            print(f"Processing league: {league['name']} (ID: {league['league_id']}) - Type: {league_type}")
+
+            leagues.append(
+                (
+                    league["name"],
+                    league["league_id"],
+                    league.get("avatar", ""),
+                    league["total_rosters"],
+                    qbs,
+                    rbs,
+                    wrs,
+                    tes,
+                    flexes,
+                    super_flexes,
+                    starters,
+                    len(league["roster_positions"]),
+                    league["sport"],
+                    rec_flexes,
+                    league_type,
+                    league_year,
+                    league.get("previous_league_id", None),
+                )
             )
-        )
+        except Exception as e:
+            print(f"Error processing league {league.get('name', 'Unknown')} (ID: {league.get('league_id', 'Unknown')}): {e}")
+            # Continue processing other leagues even if one fails
     return leagues
 
 
