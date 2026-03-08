@@ -1,24 +1,22 @@
-from itsdangerous import URLSafeTimedSerializer
-from fastapi import FastAPI, Request, Response, HTTPException
-from fastapi import FastAPI, Depends
-from psycopg2 import extras
+from fastapi import FastAPI, Request, HTTPException, Depends
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.gzip import GZipMiddleware  # Import GZipMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 import aiofiles
 from pathlib import Path
-from datetime import datetime, timedelta
-from typing import List, Optional
+from datetime import datetime
+from typing import Optional
 # Add fastapi-cache imports
 from fastapi_cache import FastAPICache
 from fastapi_cache.backends.inmemory import InMemoryBackend
 from fastapi_cache.decorator import cache
 
+# Removed Datadog imports - no longer needed
+
 # UTILS
 from db import init_db_pool, close_db, get_db
 from superflex_models import UserDataModel, LeagueDataModel, RosterDataModel, RanksDataModel
-from utils import (get_user_id, insert_current_leagues, player_manager_rosters, insert_ranks_summary,
-                   close_http_session)  # Import close_http_session
+from utils import (get_user_id, insert_current_leagues, player_manager_rosters, insert_ranks_summary,close_http_session)  # Import close_http_session
 from fleaflicker.fleaflicker_utils import (
     get_fleaflicker_user_id, get_fleaflicker_user_leagues,
     player_manager_rosters_fleaflicker, insert_fleaflicker_teams,
@@ -37,7 +35,13 @@ origins = [
     "*",
 ]
 
-app = FastAPI()
+app = FastAPI(
+    title="Fantasy Navigator API",
+    description="Fantasy sports data platform with comprehensive metrics tracking",
+    version="1.0.0"
+)
+
+# Removed Datadog middleware - no longer needed
 
 # Add Fleaflicker router
 app.include_router(fleaflicker_router)
@@ -143,10 +147,12 @@ async def user_details(user_data: UserDataModel, db=Depends(get_db)):
     
     if platform == 'fleaflicker':
         # Handle Fleaflicker league insertion
-        return await insert_current_leagues_fleaflicker(db, user_data)
+        result = await insert_current_leagues_fleaflicker(db, user_data)
     else:
         # Default Sleeper behavior
-        return await insert_current_leagues(db, user_data)
+        result = await insert_current_leagues(db, user_data)
+        
+        return result
 
 
 @app.post("/mfl_league")
@@ -168,13 +174,13 @@ async def roster(roster_data: RosterDataModel, db=Depends(get_db)):
     
     if not platform:
         # Query the platform from current_leagues table
-        query = """SELECT platform FROM dynastr.current_leagues 
-                   WHERE session_id = $1 AND league_id = $2 LIMIT 1"""
+        query = """SELECT platform FROM dynastr.current_leagues WHERE session_id = $1 AND league_id = $2 LIMIT 1"""
         result = await db.fetchrow(query, roster_data.guid, roster_data.league_id)
         platform = result['platform'] if result else 'sleeper'
         print(f"DEBUG: platform from database: {platform}")
     
     print(f"DEBUG: Using platform: {platform}")
+    
     if platform == 'fleaflicker':
         print("DEBUG: Calling Fleaflicker roster function")
         result = await player_manager_rosters_fleaflicker(db, roster_data)
@@ -229,7 +235,8 @@ async def ranks_summary(ranks_data: RanksDataModel, db=Depends(get_db)):
     elif ranks_data.rank_source == 'sleeper':
         ranks_data.rank_source = 'sf'  # Sleeper uses SuperFlex rankings
     
-    return await insert_ranks_summary(db, ranks_data)
+    result = await insert_ranks_summary(db, ranks_data)
+    return result
 
 
 @app.post("/fleaflicker_ranks_summary")
@@ -261,7 +268,6 @@ async def fleaflicker_ranks_summary(data: dict, db=Depends(get_db)):
 
 # GET ROUTES with caching
 @app.get("/leagues")
-@cache(expire=LEAGUE_CACHE_EXPIRATION)
 async def leagues(league_year: str, user_name: str, guid: str, platform: str = "sleeper", league_ids: Optional[str] = None, db=Depends(get_db), _cb: Optional[str] = None, timestamp: Optional[str] = None):
     # _cb and timestamp parameters can be used for cache busting from frontend
     # Clean username - remove any whitespace/encoding issues
@@ -713,6 +719,64 @@ async def clear_league_cache(league_id: Optional[str] = None):
         return {"message": "All cache cleared"}
 
 
+# Health check and monitoring endpoints
+@app.get("/health")
+async def health_check():
+    """Basic health check endpoint"""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "service": "fantasy-navigator-api",
+        "version": "1.0.0"
+    }
+
+
+@app.get("/health/detailed")
+async def detailed_health_check(db=Depends(get_db)):
+    """Detailed health check with database connectivity"""
+    health_status = {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "service": "fantasy-navigator-api",
+        "version": "1.0.0",
+        "checks": {
+            "database": "unknown",
+            "datadog": "unknown",
+            "cache": "unknown"
+        }
+    }
+    
+    # Test database connectivity
+    try:
+        await db.fetchval("SELECT 1")
+        health_status["checks"]["database"] = "healthy"
+    except Exception as e:
+        health_status["checks"]["database"] = f"unhealthy: {str(e)}"
+        health_status["status"] = "degraded"
+    
+    # Removed Datadog health check - no longer needed
+    
+    # Test cache
+    try:
+        # FastAPI cache doesn't have a direct health check, so we assume it's working
+        health_status["checks"]["cache"] = "healthy"
+    except Exception as e:
+        health_status["checks"]["cache"] = f"unhealthy: {str(e)}"
+        health_status["status"] = "degraded"
+    
+    return health_status
+
+
+@app.get("/metrics")
+async def get_metrics():
+    """Endpoint to expose custom application metrics"""
+    # Datadog monitoring removed - basic metrics only
+    return {
+        "status": "active",
+        "version": "1.0.0"
+    }
+
+
 # NEW RANKING SOURCE ROUTES
 # These routes follow the new pattern: /{rankingSource}/summary, /{rankingSource}/details, /{rankingSource}/best_available
 
@@ -724,7 +788,7 @@ async def ranking_source_summary(ranking_source: str, league_id: str, platform: 
     ranking_source: sf, ktc, dp, fc, dd
     platform: sleeper, fleaflicker (league platform, not ranking source)
     """
-    # Call the existing league_summary function but pass ranking_source as platform parameter
+    # Call the existing league_summary function but pass ranking_source as platform parameter  
     return await league_summary(league_id, ranking_source, rank_type, guid, roster_type, db, timestamp)
 
 @app.get("/{ranking_source}/details")

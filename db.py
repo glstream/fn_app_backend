@@ -2,7 +2,7 @@ import asyncpg
 import os
 import asyncio
 import logging
-import traceback
+import time
 from fastapi import HTTPException 
 
 pool = None
@@ -53,6 +53,7 @@ async def init_db_pool():
 
 async def get_db():
     global pool
+    start_time = time.time()
     try:
         if pool is None:
             async with pool_lock:
@@ -65,11 +66,13 @@ async def get_db():
             raise HTTPException(status_code=500, detail="Database pool not initialized")
             
         async with pool.acquire() as connection:
+            # Removed Datadog metrics - no longer needed
             yield connection
     except asyncpg.exceptions.TooManyConnectionsError as e:
         logger.error(f"Too many connections error: {e}")
         raise HTTPException(status_code=503, detail="Database connection pool exhausted")
     except Exception as e:
+        # Removed Datadog metrics - no longer needed
         logger.error(f"Failed to acquire database connection: {e}")
         logger.error(f"Full traceback:\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Database connection error: {str(e)}")

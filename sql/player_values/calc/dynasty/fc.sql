@@ -12,7 +12,8 @@ from dynastr.fc_player_ranks fc
 left join dynastr.players p on fc.sleeper_player_id = p.player_id
 where 1=1
 and rank_type = 'dynasty'
-and sf_value is not null		
+and sf_value is not null
+and player_full_name NOT LIKE '%2025%'
 and player_full_name not like '%2023%'
 and player_full_name NOT LIKE '%2024%'
 and (sf_value > 0 OR one_qb_value > 0)					 

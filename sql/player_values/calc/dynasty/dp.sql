@@ -12,6 +12,7 @@ select COALESCE(REPLACE(REPLACE(player_full_name, 'Round ', ''), ' Pick ', '.'))
 , fp_player_id as player_id	
 from dynastr.dp_player_ranks 
 where 1=1
+and player_full_name NOT LIKE '%2025%'
 and player_full_name not like '%2023%'
 and player_full_name not like '%2022%'
 and player_full_name not like '%2024%'
