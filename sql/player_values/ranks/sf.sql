@@ -1,25 +1,24 @@
 with sf_players as (select sf.player_full_name
 , CONCAT(_position, ' ', rank() OVER (partition by sf.rank_type, _position ORDER BY superflex_sf_value DESC)) as pos_rank
-, p.team
-, case when round(CAST(p.age AS float)) < 1 then Null else p.age end as age
+, sf.team
+, case when sf.age IS NULL OR sf.age < 1 then Null else sf.age end as age
 , superflex_sf_value as _value
 , row_number() OVER (ORDER BY superflex_sf_value DESC) AS _rank
-, CASE WHEN substring(lower(sf.player_full_name) from 6 for 5) = 'round' THEN 'Pick' 
+, CASE WHEN substring(lower(sf.player_full_name) from 6 for 5) = 'round' THEN 'Pick'
 		WHEN _position = 'RDP' THEN 'Pick'
 		ELSE _position END as _position
-, 'superflex_sf_value' as roster_type 
+, 'superflex_sf_value' as roster_type
 , sf.rank_type
 , ktc.rookie as is_rookie
 , COALESCE(ktc.ktc_player_id, sf.ktc_player_id) as ktc_player_id
 , sf.insert_date
 from dynastr.sf_player_ranks sf
-left join dynastr.players p on sf.player_full_name = p.full_name
 LEFT JOIN dynastr.ktc_player_ranks ktc on sf.ktc_player_id = ktc.ktc_player_id and ktc.rank_type = sf.rank_type
 UNION ALL
 select sf.player_full_name
 , CONCAT(_position, ' ', rank() OVER (partition by sf.rank_type,  _position ORDER BY superflex_one_qb_value DESC)) as pos_rank
-,  p.team
-, case when round(CAST(p.age AS float)) < 1 then Null else p.age end as age
+, sf.team
+, case when sf.age IS NULL OR sf.age < 1 then Null else sf.age end as age
 , superflex_one_qb_value as _value
 , row_number() OVER (ORDER BY superflex_one_qb_value DESC) AS _rank
 , CASE WHEN substring(lower(sf.player_full_name) from 6 for 5) = 'round' THEN 'Pick'
@@ -31,7 +30,6 @@ select sf.player_full_name
 , COALESCE(ktc.ktc_player_id, sf.ktc_player_id) as ktc_player_id
 , sf.insert_date
 from dynastr.sf_player_ranks sf
-left join dynastr.players p on sf.player_full_name = p.full_name
 LEFT JOIN dynastr.ktc_player_ranks ktc on sf.ktc_player_id = ktc.ktc_player_id and ktc.rank_type = sf.rank_type
 
 )														   

@@ -13,7 +13,7 @@ SELECT
       pre.player_full_name
   END as player_full_name,
   pre.team,
-  pre.age,
+  CASE WHEN pre.age IS NULL OR pre.age < 1 THEN NULL ELSE pre.age END as age,
   pre._position,
   pre.sf_value,
   pre.sf_rank,
@@ -25,8 +25,8 @@ SELECT
 FROM (
   SELECT
     sf.player_full_name,
-    p.team,
-    p.age,
+    sf.team,
+    sf.age,
     CASE
       WHEN substring(lower(sf.player_full_name) from 6 for 5) = 'round' THEN 'Pick'
       WHEN _position = 'RDP' THEN 'Pick'
@@ -41,7 +41,6 @@ FROM (
 	ktc.rookie as is_rookie
   FROM
     dynastr.sf_player_ranks sf
-  LEFT JOIN dynastr.players p ON sf.player_full_name = p.full_name
   LEFT JOIN (select * from dynastr.ktc_player_ranks where rank_type = 'dynasty') ktc on sf.ktc_player_id = ktc.ktc_player_id
   WHERE
    sf.player_full_name NOT LIKE '%2025%'

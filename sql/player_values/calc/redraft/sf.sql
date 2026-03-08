@@ -1,7 +1,7 @@
 SELECT
   sf.player_full_name,
-  p.team,
- p.age,
+  sf.team,
+  CASE WHEN sf.age IS NULL OR sf.age < 1 THEN NULL ELSE sf.age END as age,
   CASE
     WHEN substring(lower(sf.player_full_name) from 6 for 5) = 'round' THEN 'Pick'
     WHEN _position = 'RDP' THEN 'Pick'
@@ -17,7 +17,6 @@ SELECT
   
 FROM
   dynastr.sf_player_ranks sf
-left JOIN dynastr.players p ON sf.player_full_name = p.full_name
 left join dynastr.ktc_player_ranks ktc on sf.ktc_player_id = ktc.ktc_player_id
 WHERE
   sf.player_full_name NOT LIKE '%2022%'
