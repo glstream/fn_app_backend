@@ -272,10 +272,9 @@ WITH base_players as (SELECT
                             order by picks_player_name asc
                             ) tp
                     left join dynastr.players p on tp.player_id = p.player_id
-                    LEFT JOIN dynastr.sf_player_ranks sf on tp.ktc_player_id = sf.ktc_player_id
-                    inner join dynastr.managers m on tp.user_id = m.user_id 
+                    LEFT JOIN dynastr.sf_player_ranks sf on tp.ktc_player_id = sf.ktc_player_id AND sf.rank_type = 'rank_type'
+                    inner join dynastr.managers m on tp.user_id = m.user_id AND m.league_id = 'league_id'
                     where 1=1
-                    and (sf.rank_type = 'rank_type' OR tp.player_position = 'PICKS')
                     order by 
                     
 					player_value desc,
