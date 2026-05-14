@@ -351,35 +351,40 @@ SELECT
 								, t1.player_full_name
 								, coalesce(fc.league_type, -1)
                                 FROM (
-                                    SELECT  
+                                    SELECT
                                     al.user_id
-                                    , al.season
-                                    , al.year 
-                                    , CASE WHEN al.draft_set_flg = 'Y' and al.year = dname.season THEN al.year || ' Round ' || al.round || ' Pick ' || dname.position
-									ELSE al.year || ' Round ' || al.round END AS player_full_name  
-                                    FROM (                           
+                                    , al.year as season
+                                    , al.year
+                                    , CASE WHEN dname.draft_set_flg = 'Y' AND (dname.position::integer) < 5
+                                                THEN al.year || ' Early ' || al.round_name
+                                            WHEN dname.draft_set_flg = 'Y' AND (dname.position::integer) < 9
+                                                THEN al.year || ' Mid ' || al.round_name
+                                            WHEN dname.draft_set_flg = 'Y' AND (dname.position::integer) >= 9
+                                                THEN al.year || ' Late ' || al.round_name
+                                            ELSE al.year|| ' Mid ' || al.round_name
+                                            END AS player_full_name
+                                    FROM (
                                         SELECT dp.roster_id
                                         , dp.year
                                         , dp.round_name
                                         , dp.round
                                         , dp.league_id
                                         , dpos.user_id
-                                        , dpos.season
-                                        , dpos.draft_set_flg 
                                         FROM dynastr.draft_picks dp
                                         INNER JOIN dynastr.draft_positions dpos on dp.owner_id = dpos.roster_id and dp.league_id = dpos.league_id
 
                                         WHERE dpos.league_id = 'league_id'
                                         and dp.session_id = 'session_id'
-                                        ) al 
-                                    INNER JOIN dynastr.draft_positions dname on  dname.roster_id = al.roster_id and al.league_id = dname.league_id
+                                        GROUP BY dp.roster_id, dp.year, dp.round_name, dp.round, dp.league_id, dpos.user_id
+                                        ) al
+                                    LEFT JOIN dynastr.draft_positions dname on dname.roster_id = al.roster_id and al.league_id = dname.league_id and dname.season = al.year
                                 ) t1
                                 LEFT JOIN dynastr.fc_player_ranks fc on t1.player_full_name = fc.player_full_name
 								) picks
                             ) tp
                     left join dynastr.players p on tp.player_id = p.player_id
                     LEFT JOIN dynastr.fc_player_ranks fc on tp.player_full_name = fc.player_full_name
-                    inner join dynastr.managers m on tp.user_id = m.user_id 
+                    inner join dynastr.managers m on tp.user_id = m.user_id AND m.league_id = 'league_id'
                     where 1=1
                     and fc.rank_type = 'dynasty'
                     order by pick_year, m.display_name, m.avatar, player_value desc, tp.player_full_name	asc

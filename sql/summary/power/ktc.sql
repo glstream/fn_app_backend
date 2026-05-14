@@ -163,32 +163,33 @@ SELECT
                                 , t1.player_full_name
                                 , ktc.ktc_player_id
                                 FROM (
-                                    SELECT  
+                                    SELECT
                                     al.user_id
-                                    , al.season
-                                    , al.year 
-                                     , CASE WHEN (dname.position::integer) < 13 and al.draft_set_flg = 'Y' and al.year = dname.season
-                                                THEN al.year || ' Round ' || al.round || ' Pick ' || dname.position
-                                            WHEN (dname.position::integer) > 12 and al.draft_set_flg = 'Y' and al.year = dname.season
-                                                THEN al.year || ' ' || dname.position_name || ' ' || al.round_name 
-                                            ELSE al.year|| ' Mid ' || al.round_name 
-                                            END AS player_full_name 
-                                    FROM (                           
+                                    , al.year as season
+                                    , al.year
+                                     , CASE WHEN dname.draft_set_flg = 'Y' AND (dname.position::integer) < 5
+                                                THEN al.year || ' Early ' || al.round_name
+                                            WHEN dname.draft_set_flg = 'Y' AND (dname.position::integer) < 9
+                                                THEN al.year || ' Mid ' || al.round_name
+                                            WHEN dname.draft_set_flg = 'Y' AND (dname.position::integer) >= 9
+                                                THEN al.year || ' Late ' || al.round_name
+                                            ELSE al.year|| ' Mid ' || al.round_name
+                                            END AS player_full_name
+                                    FROM (
                                         SELECT dp.roster_id
                                         , dp.year
                                         , dp.round_name
                                         , dp.round
                                         , dp.league_id
                                         , dpos.user_id
-                                        , dpos.season
-                                        , dpos.draft_set_flg
                                         FROM dynastr.draft_picks dp
                                         inner join dynastr.draft_positions dpos on dp.owner_id = dpos.roster_id and dp.league_id = dpos.league_id
 
                                         where dpos.league_id = 'league_id'
                                         and dp.session_id = 'session_id'
-                                        ) al 
-                                    inner join dynastr.draft_positions dname on  dname.roster_id = al.roster_id and al.league_id = dname.league_id
+                                        GROUP BY dp.roster_id, dp.year, dp.round_name, dp.round, dp.league_id, dpos.user_id
+                                        ) al
+                                    LEFT join dynastr.draft_positions dname on dname.roster_id = al.roster_id and al.league_id = dname.league_id and dname.season = al.year
                                 ) t1
                                 LEFT join dynastr.ktc_player_ranks ktc on t1.player_full_name = ktc.player_full_name
                                 where 1=1
@@ -370,8 +371,8 @@ SELECT
                             ) tp
                     left join dynastr.players p on tp.player_id = p.player_id
                     inner JOIN dynastr.ktc_player_ranks ktc on tp.ktc_player_id = ktc.ktc_player_id
-                    inner join dynastr.managers m on tp.user_id = m.user_id 
-                    where 1=1 
+                    inner join dynastr.managers m on tp.user_id = m.user_id AND m.league_id = 'league_id'
+                    where 1=1
                     and ktc.rank_type = 'rank_type'
                     order by m.display_name,m.avatar, player_value desc
                     ) asset  

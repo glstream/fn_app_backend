@@ -351,32 +351,31 @@ SELECT
 								, t1.player_full_name
 								, coalesce(dd.league_type, -1)
                                 FROM (
-                                    SELECT  
+                                    SELECT
                                     al.user_id
-                                    , al.season
-                                    , al.year 
-									 , CASE WHEN (dname.position::integer / al.leaguesize  < 0.33) and (al.draft_set_flg = 'Y') and (al.year = dname.season) THEN al.year || 'early' || al.round_name || 'pi'
-                                            WHEN (dname.position::integer / al.leaguesize) >= 0.33 AND (dname.position::integer / al.leaguesize) <= 0.66 and al.draft_set_flg = 'Y' and al.year = dname.season  THEN al.year || 'mid' || al.round_name  || 'pi'
-        								    WHEN (dname.position::integer / al.leaguesize) > 0.66 and al.draft_set_flg = 'Y' and al.year = dname.season THEN al.year || 'mid' || al.round_name  || 'pi'
+                                    , al.year as season
+                                    , al.year
+									 , CASE WHEN dname.draft_set_flg = 'Y' AND (dname.position::integer / al.leaguesize  < 0.33) THEN al.year || 'early' || al.round_name || 'pi'
+                                            WHEN dname.draft_set_flg = 'Y' AND (dname.position::integer / al.leaguesize) >= 0.33 AND (dname.position::integer / al.leaguesize) <= 0.66 THEN al.year || 'mid' || al.round_name  || 'pi'
+        								    WHEN dname.draft_set_flg = 'Y' AND (dname.position::integer / al.leaguesize) > 0.66 THEN al.year || 'mid' || al.round_name  || 'pi'
         									ELSE al.year || 'mid' || al.round_name  || 'pi'
-                                            END AS player_full_name  
-                                    FROM (                           
+                                            END AS player_full_name
+                                    FROM (
                                         SELECT dp.roster_id
                                         , dp.year
                                         , dp.round_name
                                         , dp.round
                                         , dp.league_id
                                         , dpos.user_id
-                                        , dpos.season
-                                        , dpos.draft_set_flg
 										, MAX(dpos.roster_id::integer) OVER () as leaguesize
                                         FROM dynastr.draft_picks dp
                                         INNER JOIN dynastr.draft_positions dpos on dp.owner_id = dpos.roster_id and dp.league_id = dpos.league_id
 
                                         WHERE dpos.league_id = 'league_id'
                                         and dp.session_id = 'session_id'
-                                        ) al 
-                                    INNER JOIN dynastr.draft_positions dname on  dname.roster_id = al.roster_id and al.league_id = dname.league_id
+                                        GROUP BY dp.roster_id, dp.year, dp.round_name, dp.round, dp.league_id, dpos.user_id
+                                        ) al
+                                    LEFT JOIN dynastr.draft_positions dname on dname.roster_id = al.roster_id and al.league_id = dname.league_id and dname.season = al.year
                                 ) t1
                                 LEFT JOIN dynastr.dd_player_ranks dd on t1.player_full_name = dd.name_id
                                 where 1=1

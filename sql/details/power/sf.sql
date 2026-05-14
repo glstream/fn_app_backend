@@ -32,34 +32,33 @@ WITH base_players as (SELECT
                                 , t1.player_full_name
                                 , sf.ktc_player_id
                                 FROM (
-                                    SELECT  
+                                    SELECT
                                     al.user_id
-                                    , al.season
-                                    , al.year 
-                                    , CASE WHEN (dname.position::integer) < 5 and al.draft_set_flg = 'Y' and al.year = dname.season
+                                    , al.year as season
+                                    , al.year
+                                    , CASE WHEN dname.draft_set_flg = 'Y' AND (dname.position::integer) < 5
                                                 THEN al.year || ' Early ' || al.round_name
-                                            WHEN (dname.position::integer) < 9 and al.draft_set_flg = 'Y' and al.year = dname.season
+                                            WHEN dname.draft_set_flg = 'Y' AND (dname.position::integer) < 9
                                                 THEN al.year || ' Mid ' || al.round_name
-                                            WHEN (dname.position::integer) >= 9 and al.draft_set_flg = 'Y' and al.year = dname.season
+                                            WHEN dname.draft_set_flg = 'Y' AND (dname.position::integer) >= 9
                                                 THEN al.year || ' Late ' || al.round_name
-                                            ELSE al.year|| ' Mid ' || al.round_name 
-                                            END AS player_full_name 
-                                    FROM (                           
+                                            ELSE al.year|| ' Mid ' || al.round_name
+                                            END AS player_full_name
+                                    FROM (
                                         SELECT dp.roster_id
                                         , dp.year
                                         , dp.round_name
                                         , dp.round
                                         , dp.league_id
                                         , dpos.user_id
-                                        , dpos.season
-                                        , dpos.draft_set_flg
                                         FROM dynastr.draft_picks dp
                                         INNER JOIN dynastr.draft_positions dpos on dp.owner_id = dpos.roster_id and dp.league_id = dpos.league_id
 
                                         WHERE dpos.league_id = 'league_id'
                                         and dp.session_id = 'session_id'
-                                        ) al 
-                                    INNER JOIN dynastr.draft_positions dname on  dname.roster_id = al.roster_id and al.league_id = dname.league_id
+                                        GROUP BY dp.roster_id, dp.year, dp.round_name, dp.round, dp.league_id, dpos.user_id
+                                        ) al
+                                    LEFT JOIN dynastr.draft_positions dname on dname.roster_id = al.roster_id and al.league_id = dname.league_id and dname.season = al.year
                                 ) t1
                                 LEFT JOIN dynastr.sf_player_ranks sf on t1.player_full_name = sf.player_full_name
                                 where (sf.rank_type = 'rank_type' OR t1.player_full_name LIKE '%Round%' OR t1.player_full_name LIKE '%Early%' OR t1.player_full_name LIKE '%Mid%' OR t1.player_full_name LIKE '%Late%')
