@@ -386,8 +386,8 @@ async def trade_calculator(platform: str, rank_type: str, db=Depends(get_db)):
 
 @app.get("/league_summary")
 @cache(expire=LEAGUE_CACHE_EXPIRATION)
-async def league_summary(league_id: str, platform: str, rank_type: str, guid: str, roster_type: str, db=Depends(get_db), timestamp: Optional[str] = None):
-    # timestamp parameter for cache busting
+async def league_summary(league_id: str, platform: str, rank_type: str, guid: str, roster_type: str, db=Depends(get_db), timestamp: Optional[str] = None, _cb: Optional[str] = None):
+    # timestamp/_cb parameters for cache busting (included in the cache key)
     session_id = guid
     
     # The platform parameter is the ranking source (ktc, dp, fc, sf, etc.)
@@ -468,8 +468,8 @@ async def league_summary(league_id: str, platform: str, rank_type: str, guid: st
 
 @app.get("/league_detail")
 @cache(expire=LEAGUE_CACHE_EXPIRATION)
-async def league_detail(league_id: str, platform: str, rank_type: str, guid: str, roster_type: str, db=Depends(get_db), timestamp: Optional[str] = None):
-    # timestamp parameter for cache busting
+async def league_detail(league_id: str, platform: str, rank_type: str, guid: str, roster_type: str, db=Depends(get_db), timestamp: Optional[str] = None, _cb: Optional[str] = None):
+    # timestamp/_cb parameters for cache busting (included in the cache key)
     session_id = guid
     
     # The platform parameter is the ranking source (ktc, dp, fc, sf, etc.)
@@ -516,7 +516,7 @@ async def league_detail(league_id: str, platform: str, rank_type: str, guid: str
 
 @app.get("/trades_detail")
 @cache(expire=CACHE_EXPIRATION)
-async def trades_detail(league_id: str, platform: str, roster_type: str, league_year: str, rank_type: str, db=Depends(get_db)):
+async def trades_detail(league_id: str, platform: str, roster_type: str, league_year: str, rank_type: str, db=Depends(get_db), _cb: Optional[str] = None):
     # Use the platform directly from frontend - this is the ranking source (ktc, dp, fc, sf, etc.)
     print(f"DEBUG: trades_detail - Frontend sent platform={platform}")
     
@@ -563,7 +563,7 @@ async def trades_detail(league_id: str, platform: str, roster_type: str, league_
 
 @app.get("/trades_summary")
 @cache(expire=CACHE_EXPIRATION)
-async def trades_summary(league_id: str, platform: str, roster_type: str, league_year: str, rank_type: str, db=Depends(get_db)):
+async def trades_summary(league_id: str, platform: str, roster_type: str, league_year: str, rank_type: str, db=Depends(get_db), _cb: Optional[str] = None):
     # Use the platform directly from frontend - this is the ranking source (ktc, dp, fc, sf, etc.)
     print(f"DEBUG: trades_summary - Frontend sent platform={platform}")
     
@@ -598,7 +598,7 @@ async def trades_summary(league_id: str, platform: str, roster_type: str, league
 
 @app.get("/contender_league_summary")
 @cache(expire=CACHE_EXPIRATION)
-async def contender_league_summary(league_id: str, projection_source: str, guid: str, db=Depends(get_db)):
+async def contender_league_summary(league_id: str, projection_source: str, guid: str, db=Depends(get_db), _cb: Optional[str] = None):
     print(league_id, projection_source)
 
     session_id = guid
@@ -621,7 +621,7 @@ async def contender_league_summary(league_id: str, projection_source: str, guid:
 
 @app.get("/contender_league_detail")
 @cache(expire=CACHE_EXPIRATION)
-async def contender_league_detail(league_id: str, projection_source: str, guid: str, db=Depends(get_db)):
+async def contender_league_detail(league_id: str, projection_source: str, guid: str, db=Depends(get_db), _cb: Optional[str] = None):
     print(league_id, projection_source)
 
     session_id = guid
@@ -644,7 +644,7 @@ async def contender_league_detail(league_id: str, projection_source: str, guid: 
 
 @app.get("/best_available")
 @cache(expire=CACHE_EXPIRATION)
-async def best_available(league_id: str, platform: str, rank_type: str, guid: str, roster_type: str, db=Depends(get_db)):
+async def best_available(league_id: str, platform: str, rank_type: str, guid: str, roster_type: str, db=Depends(get_db), _cb: Optional[str] = None):
     session_id = guid
     
     # The platform parameter is the ranking source (ktc, dp, fc, sf, etc.)
@@ -782,33 +782,33 @@ async def get_metrics():
 
 @app.get("/{ranking_source}/summary")
 @cache(expire=LEAGUE_CACHE_EXPIRATION)
-async def ranking_source_summary(ranking_source: str, league_id: str, platform: str, rank_type: str, guid: str, roster_type: str, db=Depends(get_db), timestamp: Optional[str] = None):
+async def ranking_source_summary(ranking_source: str, league_id: str, platform: str, rank_type: str, guid: str, roster_type: str, db=Depends(get_db), timestamp: Optional[str] = None, _cb: Optional[str] = None):
     """
     Get league summary data for a specific ranking source.
     ranking_source: sf, ktc, dp, fc, dd
     platform: sleeper, fleaflicker (league platform, not ranking source)
     """
-    # Call the existing league_summary function but pass ranking_source as platform parameter  
-    return await league_summary(league_id, ranking_source, rank_type, guid, roster_type, db, timestamp)
+    # Call the existing league_summary function but pass ranking_source as platform parameter
+    return await league_summary(league_id, ranking_source, rank_type, guid, roster_type, db, timestamp, _cb)
 
 @app.get("/{ranking_source}/details")
 @cache(expire=LEAGUE_CACHE_EXPIRATION)
-async def ranking_source_details(ranking_source: str, league_id: str, platform: str, rank_type: str, guid: str, roster_type: str, db=Depends(get_db), timestamp: Optional[str] = None):
+async def ranking_source_details(ranking_source: str, league_id: str, platform: str, rank_type: str, guid: str, roster_type: str, db=Depends(get_db), timestamp: Optional[str] = None, _cb: Optional[str] = None):
     """
     Get league detail data for a specific ranking source.
     ranking_source: sf, ktc, dp, fc, dd
     platform: sleeper, fleaflicker (league platform, not ranking source)
     """
     # Call the existing league_detail function but pass ranking_source as platform parameter
-    return await league_detail(league_id, ranking_source, rank_type, guid, roster_type, db, timestamp)
+    return await league_detail(league_id, ranking_source, rank_type, guid, roster_type, db, timestamp, _cb)
 
 @app.get("/{ranking_source}/best_available")
 @cache(expire=CACHE_EXPIRATION)
-async def ranking_source_best_available(ranking_source: str, league_id: str, platform: str, rank_type: str, guid: str, roster_type: str, db=Depends(get_db)):
+async def ranking_source_best_available(ranking_source: str, league_id: str, platform: str, rank_type: str, guid: str, roster_type: str, db=Depends(get_db), _cb: Optional[str] = None):
     """
     Get best available players for a specific ranking source.
     ranking_source: sf, ktc, dp, fc, dd
     platform: sleeper, fleaflicker (league platform, not ranking source)
     """
     # Call the existing best_available function but pass ranking_source as platform parameter
-    return await best_available(league_id, ranking_source, rank_type, guid, roster_type, db)
+    return await best_available(league_id, ranking_source, rank_type, guid, roster_type, db, _cb)
